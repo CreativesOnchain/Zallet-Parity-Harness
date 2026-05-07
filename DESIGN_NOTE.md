@@ -1,4 +1,4 @@
-# Design Note: `zallet-parity-harness`
+# Design Note: `zallet-rpc-diff`
 
 ## 1. Result Categories
 Each RPC method tested will be classified into one of the following categories:
