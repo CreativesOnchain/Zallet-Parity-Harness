@@ -7,4 +7,4 @@ description = "Test helpers and mock server utilities for zallet-rpc-diff"
 
 [dependencies]
 serde_json.workspace = true
-wiremock = "0.6"
+wiremock = "0.6.5"

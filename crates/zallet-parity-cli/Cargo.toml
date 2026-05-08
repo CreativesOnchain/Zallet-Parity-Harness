@@ -12,18 +12,15 @@ path = "src/main.rs"
 [dependencies]
 zallet-parity-core = { path = "../zallet-parity-core" }
 tokio = { version = "1", features = ["full"] }
-serde.workspace = true
 serde_json.workspace = true
 clap.workspace = true
 color-eyre.workspace = true
-anyhow.workspace = true
 indicatif.workspace = true
 tracing.workspace = true
 tracing-subscriber.workspace = true
-jsonrpsee.workspace = true
 
 [dev-dependencies]
-assert_cmd = "2"
-predicates = "3"
+assert_cmd = "2.2.1"
+predicates = "3.1.4"
 zallet-parity-testkit = { path = "../zallet-parity-testkit" }
-tempfile = "3"
+tempfile = "3.27.0"
