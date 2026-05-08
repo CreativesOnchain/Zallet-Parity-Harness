@@ -33,4 +33,3 @@ pub mod expected_diffs;
 pub mod manifest;
 pub mod normalizer;
 pub mod report;
-pub mod types;
