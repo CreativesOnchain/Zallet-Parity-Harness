@@ -1,0 +1,2 @@
+# This file exists to ensure git tracks the reports/ directory.
+# All generated report files (*.json, *.md) are excluded via .gitignore.

@@ -3,8 +3,8 @@
 Cargo.lock
 
 # Generated report output (produced at runtime, not source)
-report.json
-report.md
+/reports/*
+!/reports/.gitkeep
 
 # IDE
 .idea/

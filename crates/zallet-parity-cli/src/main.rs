@@ -109,9 +109,9 @@ enum Commands {
         #[arg(
             short,
             long,
-            default_value = "report.json",
+            default_value = "reports/report.json",
             value_name = "FILE",
-            help = "Output report path (default: report.json); .md is also written"
+            help = "Output report path (default: reports/report.json); .md is also written"
         )]
         output: PathBuf,
     },
@@ -242,7 +242,22 @@ fn build_progress_bar(method_count: usize) -> Result<ProgressBar> {
 }
 
 /// Writes both the JSON and Markdown report files to disk.
+///
+/// Automatically creates the parent directory if it does not exist,
+/// so operators can use `--output reports/report.json` without needing
+/// to create the folder manually beforehand.
 fn write_reports(report: &FinalReport, json_path: &Path) -> Result<()> {
+    // Ensure the parent directory exists
+    if let Some(parent) = json_path.parent() {
+        std::fs::create_dir_all(parent).map_err(|e| {
+            color_eyre::eyre::eyre!(
+                "Failed to create output directory '{}': {}",
+                parent.display(),
+                e
+            )
+        })?;
+    }
+
     let json_output = serde_json::to_string_pretty(report)?;
     std::fs::write(json_path, &json_output).map_err(|e| {
         color_eyre::eyre::eyre!("Failed to write report to '{}': {}", json_path.display(), e)
