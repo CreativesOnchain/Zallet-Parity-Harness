@@ -1,24 +1,17 @@
-use crate::client::RpcClient;
-use crate::differ::{diff_values, DiffEntry};
-use crate::expected_diffs::ExpectedDiffs;
-use crate::normalizer::{normalize, parse_ignore_paths};
 use crate::Error;
+use crate::client::RpcClient;
+use crate::differ::{DiffEntry, diff_values};
+use crate::expected_diffs::{ExpectedDiffEntry, ExpectedDiffs};
+use crate::manifest::MethodEntry;
+use crate::normalizer::{normalize, parse_ignore_paths};
+use jsonptr::PointerBuf;
 use serde_json::Value;
 use tokio::task::JoinSet;
 
 /// JSON-RPC "method not found" error code per spec.
 const METHOD_NOT_FOUND_CODE: i32 = -32601;
 
-/// Returns `true` if the given error represents a "method not found" response.
-fn is_method_not_found(err: &Error) -> bool {
-    match err {
-        Error::JsonRpc(e) => {
-            e.to_string().contains(&METHOD_NOT_FOUND_CODE.to_string())
-                || e.to_string().to_lowercase().contains("method not found")
-        }
-        _ => false,
-    }
-}
+// ── Result type ───────────────────────────────────────────────────────────────
 
 /// The result of a single parity check.
 #[derive(Debug, Clone)]
@@ -43,6 +36,8 @@ pub enum ParityResult {
     Error(String),
 }
 
+// ── Engine ────────────────────────────────────────────────────────────────────
+
 /// The engine responsible for executing the parity suite.
 pub struct ParityEngine {
     upstream: RpcClient,
@@ -56,116 +51,209 @@ impl ParityEngine {
 
     /// Runs the parity checks for all methods defined in the manifest.
     ///
-    /// Each method is executed concurrently via `tokio::task::JoinSet`.
+    /// Each method is executed concurrently via [`tokio::task::JoinSet`].
     /// The normalization pipeline (key-sort + ignore-paths) is applied
     /// before comparison. If a diff is found and it matches an entry in
-    /// `expected_diffs`, it is classified as `ExpectedDiff` instead of `Diff`.
+    /// `expected_diffs`, it is classified as [`ParityResult::ExpectedDiff`]
+    /// instead of [`ParityResult::Diff`].
     pub async fn run_all(
         &self,
-        methods: Vec<crate::manifest::MethodEntry>,
+        methods: Vec<MethodEntry>,
         expected_diffs: &ExpectedDiffs,
     ) -> Vec<(String, ParityResult)> {
-        let mut set = JoinSet::new();
-        let mut results = Vec::new();
-
-        // Clone expected entries so they can be moved into spawned tasks
         let expected_entries: Vec<_> = expected_diffs.expected.clone();
 
-        for entry in methods {
-            let upstream = self.upstream.clone();
-            let target = self.target.clone();
-            let method_name = entry.name.clone();
-            let params = entry.params.unwrap_or(Value::Null);
-            let raw_ignore_paths = entry.ignore_paths.clone();
-            let expected = expected_entries.clone();
-
-            set.spawn(async move {
-                // Parse ignore paths — log and skip on invalid pointers
-                let ignore_paths = match parse_ignore_paths(&raw_ignore_paths) {
-                    Ok(paths) => paths,
-                    Err(e) => {
-                        tracing::warn!("Invalid ignore path for '{}': {}", method_name, e);
-                        vec![]
-                    }
-                };
-
-                let res_u = upstream.call(&method_name, params.clone()).await;
-                let res_t = target.call(&method_name, params).await;
-
-                let parity = match (res_u, res_t) {
-                    (Ok(u), Ok(t)) => {
-                        // Apply normalization pipeline before comparison
-                        let u_norm = normalize(u, &ignore_paths);
-                        let t_norm = normalize(t, &ignore_paths);
-
-                        let entries = diff_values(&u_norm, &t_norm);
-
-                        if entries.is_empty() {
-                            ParityResult::Match
-                        } else {
-                            // Check if this diff is known/expected
-                            let actual_paths: Vec<String> =
-                                entries.iter().map(|e| e.path.clone()).collect();
-
-                            let expected_entry = expected.iter().find(|ee| {
-                                if ee.method != method_name {
-                                    return false;
-                                }
-                                if ee.diff_paths.is_empty() {
-                                    return true;
-                                }
-                                actual_paths.iter().all(|p| {
-                                    ee.diff_paths.iter().any(|ep| p.starts_with(ep.as_str()))
-                                })
-                            });
-
-                            if let Some(ee) = expected_entry {
-                                ParityResult::ExpectedDiff {
-                                    diff_entries: entries,
-                                    reason: ee.reason.clone(),
-                                }
-                            } else {
-                                ParityResult::Diff {
-                                    diff_entries: entries,
-                                }
-                            }
-                        }
-                    }
-                    // Both sides: method not found
-                    (Err(ref e_u), Err(ref e_t))
-                        if is_method_not_found(e_u) && is_method_not_found(e_t) =>
-                    {
-                        ParityResult::Missing {
-                            method: method_name.clone(),
-                        }
-                    }
-                    // One side: method not found
-                    (Err(ref e), _) if is_method_not_found(e) => ParityResult::Missing {
-                        method: method_name.clone(),
-                    },
-                    (_, Err(ref e)) if is_method_not_found(e) => ParityResult::Missing {
-                        method: method_name.clone(),
-                    },
-                    // Other upstream error
-                    (Err(e), _) => ParityResult::Error(format!("Upstream error: {}", e)),
-                    // Other target error
-                    (_, Err(e)) => ParityResult::Error(format!("Target error: {}", e)),
-                };
-
-                (method_name, parity)
-            });
-        }
-
-        while let Some(res) = set.join_next().await {
-            match res {
-                Ok(tagged_res) => results.push(tagged_res),
-                Err(e) => tracing::error!("Task failed: {}", e),
-            }
-        }
-
-        results
+        let mut set = spawn_tasks(&self.upstream, &self.target, methods, expected_entries);
+        collect_results(&mut set).await
     }
 }
+
+// ── Task spawning ─────────────────────────────────────────────────────────────
+
+/// Spawns one async task per method and returns the `JoinSet` handle.
+fn spawn_tasks(
+    upstream: &RpcClient,
+    target: &RpcClient,
+    methods: Vec<MethodEntry>,
+    expected_entries: Vec<ExpectedDiffEntry>,
+) -> JoinSet<(String, ParityResult)> {
+    let mut set = JoinSet::new();
+
+    for entry in methods {
+        let upstream = upstream.clone();
+        let target = target.clone();
+        let expected = expected_entries.clone();
+
+        set.spawn(async move { run_single_method(upstream, target, entry, expected).await });
+    }
+
+    set
+}
+
+/// Awaits all spawned tasks and collects their results, logging any panics.
+async fn collect_results(set: &mut JoinSet<(String, ParityResult)>) -> Vec<(String, ParityResult)> {
+    let mut results = Vec::new();
+    while let Some(join_result) = set.join_next().await {
+        match join_result {
+            Ok(tagged) => results.push(tagged),
+            Err(e) => tracing::error!("Parity task panicked: {}", e),
+        }
+    }
+    results
+}
+
+// ── Single-method execution ───────────────────────────────────────────────────
+
+/// Executes the parity check for one method end-to-end.
+///
+/// Phases: parse ignore paths → call both endpoints → normalize → diff → classify.
+async fn run_single_method(
+    upstream: RpcClient,
+    target: RpcClient,
+    entry: MethodEntry,
+    expected_entries: Vec<ExpectedDiffEntry>,
+) -> (String, ParityResult) {
+    let method_name = entry.name.clone();
+    let params = entry.params.clone().unwrap_or(Value::Null);
+    let ignore_paths = resolve_ignore_paths(&method_name, &entry.ignore_paths);
+
+    let res_u = upstream.call(&method_name, params.clone()).await;
+    let res_t = target.call(&method_name, params).await;
+
+    let parity = classify_rpc_results(res_u, res_t, &method_name, &ignore_paths, &expected_entries);
+    (method_name, parity)
+}
+
+/// Parses and returns the compiled ignore paths for a method.
+///
+/// Logs a warning and returns an empty list if any path is invalid,
+/// so a misconfigured manifest never silently blocks the run.
+fn resolve_ignore_paths(method_name: &str, raw: &[String]) -> Vec<PointerBuf> {
+    match parse_ignore_paths(raw) {
+        Ok(paths) => paths,
+        Err(e) => {
+            tracing::warn!("Invalid ignore path for '{}': {}", method_name, e);
+            vec![]
+        }
+    }
+}
+
+// ── Classification ────────────────────────────────────────────────────────────
+
+/// Maps the pair of RPC call outcomes to a [`ParityResult`].
+///
+/// The happy path (both `Ok`) delegates to [`classify_diff`].
+/// All error cases delegate to [`classify_error_pair`].
+fn classify_rpc_results(
+    res_u: Result<Value, Error>,
+    res_t: Result<Value, Error>,
+    method_name: &str,
+    ignore_paths: &[PointerBuf],
+    expected_entries: &[ExpectedDiffEntry],
+) -> ParityResult {
+    match (res_u, res_t) {
+        (Ok(u), Ok(t)) => {
+            let u_norm = normalize(u, ignore_paths);
+            let t_norm = normalize(t, ignore_paths);
+            let diff_entries = diff_values(&u_norm, &t_norm);
+            classify_diff(diff_entries, method_name, expected_entries)
+        }
+        (err_u, err_t) => classify_error_pair(err_u, err_t, method_name),
+    }
+}
+
+/// Classifies a successful (both endpoints responded) comparison result.
+///
+/// Returns `Match` if there are no diffs, `ExpectedDiff` if all diffs are
+/// covered by the expected-diffs file, or `Diff` otherwise.
+fn classify_diff(
+    diff_entries: Vec<DiffEntry>,
+    method_name: &str,
+    expected_entries: &[ExpectedDiffEntry],
+) -> ParityResult {
+    if diff_entries.is_empty() {
+        return ParityResult::Match;
+    }
+
+    let actual_paths: Vec<&str> = diff_entries.iter().map(|e| e.path.as_str()).collect();
+
+    if let Some(expected) = find_expected_entry(method_name, &actual_paths, expected_entries) {
+        ParityResult::ExpectedDiff {
+            diff_entries,
+            reason: expected.reason.clone(),
+        }
+    } else {
+        ParityResult::Diff { diff_entries }
+    }
+}
+
+/// Searches for an expected-diff entry that covers all actual diff paths.
+///
+/// A method-level entry (`diff_paths` is empty) matches any set of paths.
+/// A field-level entry matches only when every actual path is prefixed by
+/// at least one of the declared expected paths.
+fn find_expected_entry<'a>(
+    method_name: &str,
+    actual_paths: &[&str],
+    expected_entries: &'a [ExpectedDiffEntry],
+) -> Option<&'a ExpectedDiffEntry> {
+    expected_entries.iter().find(|ee| {
+        if ee.method != method_name {
+            return false;
+        }
+        // Method-level entry: any diff on this method is expected.
+        if ee.diff_paths.is_empty() {
+            return true;
+        }
+        // Field-level entry: every actual path must be covered.
+        actual_paths
+            .iter()
+            .all(|p| ee.diff_paths.iter().any(|ep| p.starts_with(ep.as_str())))
+    })
+}
+
+/// Classifies a result pair where at least one side returned an error.
+///
+/// Method-not-found errors (-32601) from either side become `Missing`.
+/// All other errors become `Error` with a directional prefix.
+fn classify_error_pair(
+    res_u: Result<Value, Error>,
+    res_t: Result<Value, Error>,
+    method_name: &str,
+) -> ParityResult {
+    match (&res_u, &res_t) {
+        // Both sides: method not found
+        (Err(e_u), Err(e_t)) if is_method_not_found(e_u) && is_method_not_found(e_t) => {
+            ParityResult::Missing {
+                method: method_name.to_string(),
+            }
+        }
+        // Only one side: method not found
+        (Err(e), _) | (_, Err(e)) if is_method_not_found(e) => ParityResult::Missing {
+            method: method_name.to_string(),
+        },
+        // Upstream transport/RPC error
+        (Err(e), _) => ParityResult::Error(format!("Upstream error: {}", e)),
+        // Target transport/RPC error
+        (_, Err(e)) => ParityResult::Error(format!("Target error: {}", e)),
+        // Both Ok — should not reach here; caller is responsible for routing correctly.
+        (Ok(_), Ok(_)) => unreachable!("classify_error_pair called with two Ok results"),
+    }
+}
+
+/// Returns `true` if the given error represents a "method not found" response.
+fn is_method_not_found(err: &Error) -> bool {
+    match err {
+        Error::JsonRpc(e) => {
+            let s = e.to_string();
+            s.contains(&METHOD_NOT_FOUND_CODE.to_string())
+                || s.to_lowercase().contains("method not found")
+        }
+        _ => false,
+    }
+}
+
+// ── Tests ─────────────────────────────────────────────────────────────────────
 
 #[cfg(test)]
 mod tests {
@@ -303,7 +391,6 @@ mod tests {
         let u = MockNode::spawn().await;
         let t = MockNode::spawn().await;
         let method = "test_field_expected";
-        // Diff only at /softforks — which is covered by the expected entry
         u.mock_response(
             method,
             json!(null),
@@ -345,7 +432,6 @@ mod tests {
         let u = MockNode::spawn().await;
         let t = MockNode::spawn().await;
         let method = "test_partial_expected";
-        // Diff at /softforks (expected) AND /chain (unexpected)
         u.mock_response(
             method,
             json!(null),
@@ -373,7 +459,6 @@ mod tests {
         );
         let results = engine.run_all(vec![entry(method)], &expected).await;
         assert_eq!(results.len(), 1);
-        // /chain is NOT covered → must be DIFF, not ExpectedDiff
         assert!(
             matches!(results[0].1, ParityResult::Diff { .. }),
             "partial coverage should remain DIFF, got: {:?}",
