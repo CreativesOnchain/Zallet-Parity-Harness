@@ -68,28 +68,47 @@ impl ExpectedDiffs {
     /// Checks whether the given method+paths combination is covered by an
     /// expected-difference entry.
     ///
-    /// - If an entry exists for the method with no `diff_paths`, all diffs are expected.
-    /// - If an entry exists with `diff_paths`, the diff is expected only if **all**
-    ///   of the actual diff paths are covered by the entry's paths.
+    /// Returns the matching [`ExpectedDiffEntry`] if found, or `None` if
+    /// the diff should be treated as unexpected.
+    ///
+    /// See [`find_covering_entry`] for the matching rules.
     pub fn is_expected(
         &self,
         method: &str,
         actual_diff_paths: &[String],
     ) -> Option<&ExpectedDiffEntry> {
-        self.expected.iter().find(|entry| {
-            if entry.method != method {
-                return false;
-            }
-            if entry.diff_paths.is_empty() {
-                // Method-level: any diff on this method is expected
-                return true;
-            }
-            // Field-level: every actual diff path must be covered by the entry
-            actual_diff_paths
-                .iter()
-                .all(|p| entry.diff_paths.iter().any(|ep| p.starts_with(ep.as_str())))
-        })
+        find_covering_entry(method, actual_diff_paths, &self.expected)
     }
+}
+
+// ── Matching logic ────────────────────────────────────────────────────────────
+
+/// Searches `entries` for one that covers all `actual_diff_paths` for `method`.
+///
+/// Matching rules:
+/// - **Method-level** (`diff_paths` is empty): any diff on this method is expected.
+/// - **Field-level** (`diff_paths` is non-empty): the entry matches only when
+///   *every* actual path starts with at least one of the declared expected paths.
+///
+/// Returns `None` if no entry covers the combination.
+pub fn find_covering_entry<'a>(
+    method: &str,
+    actual_diff_paths: &[String],
+    entries: &'a [ExpectedDiffEntry],
+) -> Option<&'a ExpectedDiffEntry> {
+    entries.iter().find(|entry| {
+        if entry.method != method {
+            return false;
+        }
+        if entry.diff_paths.is_empty() {
+            // Method-level: any diff on this method is expected.
+            return true;
+        }
+        // Field-level: every actual diff path must be covered.
+        actual_diff_paths
+            .iter()
+            .all(|p| entry.diff_paths.iter().any(|ep| p.starts_with(ep.as_str())))
+    })
 }
 
 // ── Unit tests ───────────────────────────────────────────────────────────────

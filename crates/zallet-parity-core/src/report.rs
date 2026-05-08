@@ -3,6 +3,8 @@ use crate::engine::ParityResult;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
+// ── Report types ──────────────────────────────────────────────────────────────
+
 /// The final report structure for a parity run.
 #[derive(Debug, Serialize, Deserialize)]
 pub struct FinalReport {
@@ -10,7 +12,7 @@ pub struct FinalReport {
     pub details: HashMap<String, ParityResultReport>,
 }
 
-/// Counts for the run summary.
+/// Aggregate counts for the run summary.
 #[derive(Debug, Serialize, Deserialize)]
 pub struct RunSummary {
     pub total: usize,
@@ -51,7 +53,10 @@ pub enum ParityResultReport {
     },
 }
 
+// ── FinalReport construction ──────────────────────────────────────────────────
+
 impl FinalReport {
+    /// Builds a `FinalReport` from a list of `(method_name, ParityResult)` pairs.
     pub fn new(results: Vec<(String, ParityResult)>) -> Self {
         let mut matches = 0usize;
         let mut diffs = 0usize;
@@ -61,42 +66,14 @@ impl FinalReport {
         let mut details = HashMap::new();
 
         for (method, res) in results {
-            let report_res = match res {
-                ParityResult::Match => {
-                    matches += 1;
-                    ParityResultReport::Match
-                }
-                ParityResult::Diff { diff_entries } => {
-                    diffs += 1;
-                    let diff_paths: Vec<String> =
-                        diff_entries.iter().map(|e| e.path.clone()).collect();
-                    ParityResultReport::Diff {
-                        diff_count: diff_paths.len(),
-                        diff_paths,
-                    }
-                }
-                ParityResult::ExpectedDiff {
-                    diff_entries,
-                    reason,
-                } => {
-                    expected_diffs += 1;
-                    let diff_paths: Vec<String> =
-                        diff_entries.iter().map(|e| e.path.clone()).collect();
-                    ParityResultReport::ExpectedDiff {
-                        diff_count: diff_paths.len(),
-                        diff_paths,
-                        reason,
-                    }
-                }
-                ParityResult::Missing { method: ref m } => {
-                    missing += 1;
-                    ParityResultReport::Missing { method: m.clone() }
-                }
-                ParityResult::Error(message) => {
-                    errors += 1;
-                    ParityResultReport::Error { message }
-                }
-            };
+            let report_res = classify_result(
+                res,
+                &mut matches,
+                &mut diffs,
+                &mut expected_diffs,
+                &mut missing,
+                &mut errors,
+            );
             details.insert(method, report_res);
         }
 
@@ -134,63 +111,143 @@ impl FinalReport {
         (Self::new(mapped), raw_diffs)
     }
 
+    /// Renders the report as a Markdown document suitable for human review or PR comments.
     pub fn to_markdown(&self) -> String {
-        let mut md = String::from("# Zallet Parity Report\n\n");
-        md.push_str(&format!("- **Total Tests**: {}\n", self.summary.total));
-        md.push_str(&format!("- **✅ Matches**: {}\n", self.summary.matches));
-        md.push_str(&format!("- **❌ Diffs**: {}\n", self.summary.diffs));
-        md.push_str(&format!(
-            "- **📋 Expected Diffs**: {}\n",
-            self.summary.expected_diffs
-        ));
-        md.push_str(&format!("- **🔍 Missing**: {}\n", self.summary.missing));
-        md.push_str(&format!("- **⚠️ Errors**: {}\n\n", self.summary.errors));
-
-        md.push_str("## Detailed Results\n\n");
-        md.push_str("| Method | Status | Details |\n");
-        md.push_str("| :--- | :--- | :--- |\n");
-
-        let mut sorted_details: Vec<_> = self.details.iter().collect();
-        sorted_details.sort_by_key(|(k, _)| *k);
-
-        for (method, res) in sorted_details {
-            let (status, notes) = match res {
-                ParityResultReport::Match => ("✅ Match", String::new()),
-                ParityResultReport::Diff {
-                    diff_count,
-                    diff_paths,
-                } => {
-                    let paths = diff_paths.join(", ");
-                    (
-                        "❌ Diff",
-                        format!("{} field(s) differ: `{}`", diff_count, paths),
-                    )
-                }
-                ParityResultReport::ExpectedDiff {
-                    diff_count,
-                    diff_paths,
-                    reason,
-                } => {
-                    let paths = diff_paths.join(", ");
-                    (
-                        "📋 Expected Diff",
-                        format!("{} field(s): `{}` — _{}_", diff_count, paths, reason),
-                    )
-                }
-                ParityResultReport::Missing { method: m } => (
-                    "🔍 Missing",
-                    format!("Method `{}` not found on one endpoint", m),
-                ),
-                ParityResultReport::Error { message } => ("⚠️ Error", message.clone()),
-            };
-            md.push_str(&format!(
-                "| `{}` | {} | {} |\n",
-                method,
-                status,
-                notes.replace('\n', "<br>")
-            ));
-        }
-
+        let mut md = String::new();
+        md.push_str(&render_summary_section(&self.summary));
+        md.push_str(&render_details_table(&self.details));
         md
+    }
+}
+
+// ── Construction helpers ──────────────────────────────────────────────────────
+
+/// Converts a single `ParityResult` to its serializable `ParityResultReport` form,
+/// incrementing the appropriate counter as a side effect.
+fn classify_result(
+    res: ParityResult,
+    matches: &mut usize,
+    diffs: &mut usize,
+    expected_diffs: &mut usize,
+    missing: &mut usize,
+    errors: &mut usize,
+) -> ParityResultReport {
+    match res {
+        ParityResult::Match => {
+            *matches += 1;
+            ParityResultReport::Match
+        }
+        ParityResult::Diff { diff_entries } => {
+            *diffs += 1;
+            let diff_paths = extract_paths(&diff_entries);
+            ParityResultReport::Diff {
+                diff_count: diff_paths.len(),
+                diff_paths,
+            }
+        }
+        ParityResult::ExpectedDiff {
+            diff_entries,
+            reason,
+        } => {
+            *expected_diffs += 1;
+            let diff_paths = extract_paths(&diff_entries);
+            ParityResultReport::ExpectedDiff {
+                diff_count: diff_paths.len(),
+                diff_paths,
+                reason,
+            }
+        }
+        ParityResult::Missing { method: m } => {
+            *missing += 1;
+            ParityResultReport::Missing { method: m }
+        }
+        ParityResult::Error(message) => {
+            *errors += 1;
+            ParityResultReport::Error { message }
+        }
+    }
+}
+
+/// Extracts the JSON Pointer path strings from a list of `DiffEntry` items.
+fn extract_paths(entries: &[DiffEntry]) -> Vec<String> {
+    entries.iter().map(|e| e.path.clone()).collect()
+}
+
+// ── Markdown rendering helpers ────────────────────────────────────────────────
+
+/// Renders the summary block at the top of the Markdown report.
+fn render_summary_section(s: &RunSummary) -> String {
+    format!(
+        "# Zallet Parity Report\n\n\
+         - **Total Tests**: {total}\n\
+         - **✅ Matches**: {matches}\n\
+         - **❌ Diffs**: {diffs}\n\
+         - **📋 Expected Diffs**: {expected_diffs}\n\
+         - **🔍 Missing**: {missing}\n\
+         - **⚠️ Errors**: {errors}\n\n",
+        total = s.total,
+        matches = s.matches,
+        diffs = s.diffs,
+        expected_diffs = s.expected_diffs,
+        missing = s.missing,
+        errors = s.errors,
+    )
+}
+
+/// Renders the per-method detailed results as a sorted Markdown table.
+fn render_details_table(details: &HashMap<String, ParityResultReport>) -> String {
+    let mut md = String::from("## Detailed Results\n\n");
+    md.push_str("| Method | Status | Details |\n");
+    md.push_str("| :--- | :--- | :--- |\n");
+
+    let mut sorted: Vec<_> = details.iter().collect();
+    sorted.sort_by_key(|(k, _)| *k);
+
+    for (method, res) in sorted {
+        let (status, notes) = format_result_row(res);
+        md.push_str(&format!(
+            "| `{}` | {} | {} |\n",
+            method,
+            status,
+            notes.replace('\n', "<br>")
+        ));
+    }
+
+    md
+}
+
+/// Returns the (status emoji+label, detail notes) pair for one result row.
+fn format_result_row(res: &ParityResultReport) -> (&'static str, String) {
+    match res {
+        ParityResultReport::Match => ("✅ Match", String::new()),
+        ParityResultReport::Diff {
+            diff_count,
+            diff_paths,
+        } => (
+            "❌ Diff",
+            format!(
+                "{} field(s) differ: `{}`",
+                diff_count,
+                diff_paths.join(", ")
+            ),
+        ),
+        ParityResultReport::ExpectedDiff {
+            diff_count,
+            diff_paths,
+            reason,
+        } => (
+            "📋 Expected Diff",
+            format!(
+                "{} field(s): `{}` — _{}_ ",
+                diff_count,
+                diff_paths.join(", "),
+                reason
+            ),
+        ),
+        ParityResultReport::Missing { method } => (
+            "🔍 Missing",
+            format!("Method `{}` not found on one endpoint", method),
+        ),
+        ParityResultReport::Error { message } => ("⚠️ Error", message.clone()),
     }
 }
