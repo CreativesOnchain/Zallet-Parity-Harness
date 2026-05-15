@@ -1,0 +1,108 @@
+{
+  "summary": {
+    "total": 24,
+    "matches": 0,
+    "diffs": 0,
+    "expected_diffs": 0,
+    "missing": 16,
+    "errors": 8
+  },
+  "details": {
+    "getdeprecationinfo": {
+      "type": "missing",
+      "method": "getdeprecationinfo"
+    },
+    "getbalance": {
+      "type": "missing",
+      "method": "getbalance"
+    },
+    "getdifficulty": {
+      "type": "error",
+      "message": "Target error: jsonrpsee error: client error (Connect)"
+    },
+    "z_getoperationresult": {
+      "type": "missing",
+      "method": "z_getoperationresult"
+    },
+    "getblockcount": {
+      "type": "error",
+      "message": "Target error: jsonrpsee error: client error (Connect)"
+    },
+    "listunspent": {
+      "type": "missing",
+      "method": "listunspent"
+    },
+    "getblockchaininfo": {
+      "type": "error",
+      "message": "Target error: jsonrpsee error: client error (Connect)"
+    },
+    "listaddresses": {
+      "type": "missing",
+      "method": "listaddresses"
+    },
+    "getmininginfo": {
+      "type": "error",
+      "message": "Target error: jsonrpsee error: client error (Connect)"
+    },
+    "validateaddress": {
+      "type": "error",
+      "message": "Upstream error: jsonrpsee error: ErrorObject { code: ServerError(-1), message: \"Invalid params\", data: None }"
+    },
+    "z_gettotalbalance": {
+      "type": "missing",
+      "method": "z_gettotalbalance"
+    },
+    "z_listaddresses": {
+      "type": "missing",
+      "method": "z_listaddresses"
+    },
+    "getnetworkinfo": {
+      "type": "error",
+      "message": "Target error: jsonrpsee error: client error (Connect)"
+    },
+    "z_getoperationstatus": {
+      "type": "missing",
+      "method": "z_getoperationstatus"
+    },
+    "getnettotals": {
+      "type": "missing",
+      "method": "getnettotals"
+    },
+    "getconnectioncount": {
+      "type": "missing",
+      "method": "getconnectioncount"
+    },
+    "getaddressesbyaccount": {
+      "type": "missing",
+      "method": "getaddressesbyaccount"
+    },
+    "getmemoryinfo": {
+      "type": "missing",
+      "method": "getmemoryinfo"
+    },
+    "z_validateaddress": {
+      "type": "error",
+      "message": "Upstream error: jsonrpsee error: ErrorObject { code: ServerError(-1), message: \"Invalid params\", data: None }"
+    },
+    "z_listunspent": {
+      "type": "missing",
+      "method": "z_listunspent"
+    },
+    "listtransactions": {
+      "type": "missing",
+      "method": "listtransactions"
+    },
+    "getwalletinfo": {
+      "type": "missing",
+      "method": "getwalletinfo"
+    },
+    "getbestblockhash": {
+      "type": "error",
+      "message": "Target error: jsonrpsee error: client error (Connect)"
+    },
+    "listreceivedbyaddress": {
+      "type": "missing",
+      "method": "listreceivedbyaddress"
+    }
+  }
+}
