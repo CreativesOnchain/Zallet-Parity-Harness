@@ -157,13 +157,7 @@ async fn run_single_method(
         Err(e) => format!("Error: {}", e),
     };
 
-    let parity = classify_rpc_results(
-        res_u,
-        res_t,
-        &method_name,
-        &ignore_paths,
-        &expected_entries,
-    );
+    let parity = classify_rpc_results(res_u, res_t, &method_name, &ignore_paths, &expected_entries);
 
     if save_raw && !matches!(parity, ParityResult::Match) {
         let _ = std::fs::create_dir_all("reports/raw");
@@ -373,7 +367,12 @@ mod tests {
             RpcClient::new(&t.url()).unwrap(),
         );
         let results = engine
-            .run_all(vec![entry(method)], &no_expected(), DEFAULT_CONCURRENCY, false)
+            .run_all(
+                vec![entry(method)],
+                &no_expected(),
+                DEFAULT_CONCURRENCY,
+                false,
+            )
             .await;
         assert_eq!(results.len(), 1);
         assert!(matches!(results[0].1, ParityResult::Match));
@@ -395,7 +394,12 @@ mod tests {
             RpcClient::new(&t.url()).unwrap(),
         );
         let results = engine
-            .run_all(vec![entry(method)], &no_expected(), DEFAULT_CONCURRENCY, false)
+            .run_all(
+                vec![entry(method)],
+                &no_expected(),
+                DEFAULT_CONCURRENCY,
+                false,
+            )
             .await;
         assert_eq!(results.len(), 1);
         assert!(
@@ -421,7 +425,12 @@ mod tests {
             RpcClient::new(&t.url()).unwrap(),
         );
         let results = engine
-            .run_all(vec![entry(method)], &no_expected(), DEFAULT_CONCURRENCY, false)
+            .run_all(
+                vec![entry(method)],
+                &no_expected(),
+                DEFAULT_CONCURRENCY,
+                false,
+            )
             .await;
         assert_eq!(results.len(), 1);
         if let ParityResult::Diff { diff_entries } = &results[0].1 {
@@ -583,7 +592,9 @@ mod tests {
             .run_all(
                 vec![entry_with_ignore(method, vec!["/volatile"])],
                 &no_expected(),
-                DEFAULT_CONCURRENCY, false)
+                DEFAULT_CONCURRENCY,
+                false,
+            )
             .await;
         assert_eq!(results.len(), 1);
         assert!(
@@ -608,7 +619,12 @@ mod tests {
             RpcClient::new(&t.url()).unwrap(),
         );
         let results = engine
-            .run_all(vec![entry(method)], &no_expected(), DEFAULT_CONCURRENCY, false)
+            .run_all(
+                vec![entry(method)],
+                &no_expected(),
+                DEFAULT_CONCURRENCY,
+                false,
+            )
             .await;
         assert_eq!(results.len(), 1);
         assert!(
@@ -634,7 +650,12 @@ mod tests {
             RpcClient::new(&t.url()).unwrap(),
         );
         let results = engine
-            .run_all(vec![entry(method)], &no_expected(), DEFAULT_CONCURRENCY, false)
+            .run_all(
+                vec![entry(method)],
+                &no_expected(),
+                DEFAULT_CONCURRENCY,
+                false,
+            )
             .await;
         assert_eq!(results.len(), 1);
         assert!(
@@ -698,7 +719,12 @@ mod tests {
             RpcClient::new(&t.url()).unwrap(),
         );
         let results = engine
-            .run_all(vec![entry(method)], &no_expected(), DEFAULT_CONCURRENCY, false)
+            .run_all(
+                vec![entry(method)],
+                &no_expected(),
+                DEFAULT_CONCURRENCY,
+                false,
+            )
             .await;
         assert!(
             matches!(&results[0].1, ParityResult::Missing { .. }),
@@ -728,7 +754,12 @@ mod tests {
             RpcClient::new(&t.url()).unwrap(),
         );
         let results = engine
-            .run_all(vec![entry(method)], &no_expected(), DEFAULT_CONCURRENCY, false)
+            .run_all(
+                vec![entry(method)],
+                &no_expected(),
+                DEFAULT_CONCURRENCY,
+                false,
+            )
             .await;
         assert!(
             matches!(results[0].1, ParityResult::Match),
@@ -757,7 +788,9 @@ mod tests {
             .run_all(
                 vec![entry_with_params(method, json!([""]))],
                 &no_expected(),
-                DEFAULT_CONCURRENCY, false)
+                DEFAULT_CONCURRENCY,
+                false,
+            )
             .await;
         assert!(
             matches!(results[0].1, ParityResult::Match),
@@ -784,7 +817,9 @@ mod tests {
             .run_all(
                 vec![entry_with_params(method, json!("myaddr"))],
                 &no_expected(),
-                DEFAULT_CONCURRENCY, false)
+                DEFAULT_CONCURRENCY,
+                false,
+            )
             .await;
         assert!(
             matches!(results[0].1, ParityResult::Match),
