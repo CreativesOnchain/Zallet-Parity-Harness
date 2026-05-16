@@ -163,7 +163,22 @@ zallet-rpc-diff run \
   --manifest       manifest.toml \
   --expected-diffs expected_diffs.toml \
   --output         reports/report.json \
-  --concurrency    8
+  --concurrency    8 \
+  --tags           wallet shielded \
+  --exclude-tags   volatile \
+  --save-raw
+```
+
+### Dry Run Filtering
+
+You can test your `--tags` and `--exclude-tags` logic without actually executing any RPC calls:
+
+```bash
+zallet-rpc-diff run \
+  --upstream-url http://user:pass@127.0.0.1:8232 \
+  --target-url   http://user:pass@127.0.0.1:9067 \
+  --tags wallet \
+  --dry-run
 ```
 
 ### With verbose logging
@@ -192,7 +207,8 @@ RUST_LOG=zallet_parity_core=debug zallet-rpc-diff run ...
 | ✅ **MATCH** | Normalized responses are identical | No action needed |
 | ❌ **DIFF** | Responses differ at specific JSON Pointer paths | Investigate; file bug or add to `expected_diffs.toml` if intentional |
 | 📋 **EXPECTED_DIFF** | Diff is listed in `expected_diffs.toml` — known/intentional | No action needed; review periodically |
-| 🔍 **MISSING** | One endpoint returned `-32601` (method not found) | Zallet has not yet implemented this method, or zcashd has deprecated it |
+| 🔍 **MISSING** | One endpoint returned `-32601` (method not found) | Investigate if unexpected, add to `expected_diffs.toml` if it's intentional |
+| 📉 **EXPECTED_MISSING**| Method is marked as `expected_missing = true` in `expected_diffs.toml` | No action needed |
 | ⚠️ **ERROR** | Transport failure or non-method-not-found RPC error | Check node health, RPC auth, and network connectivity |
 
 ### Reading `report.json`
@@ -221,7 +237,7 @@ RUST_LOG=zallet_parity_core=debug zallet-rpc-diff run ...
   - `/private` → the `private` field at the root of the response
   - `/softforks/0/id` → the `id` field in the first element of `softforks`
 - The report does **not** dump full upstream/target payloads by default.
-  For verbose debugging, use `RUST_LOG=debug`.
+  For verbose debugging, run the CLI with the `--save-raw` flag to write JSON files to `reports/raw/`.
 
 ### Reading `report.md`
 
@@ -316,14 +332,19 @@ diff_paths = ["/version", "/subversion"]
 ### Method returns MISSING on Zallet
 
 Zallet is still being developed and does not yet implement all zcashd methods.
-This is expected. The engine always reports a missing method as `MISSING` (exit code 1),
-regardless of whether it appears in `expected_diffs.toml`.
+If you get a `MISSING` result, this counts towards the exit-code-1 condition.
 
 To acknowledge missing methods without blocking CI:
-- Document them in a comment block in `expected_diffs.toml` for visibility.
-- Use `--expected-diffs` pointing to a file that explains why each method is not yet implemented.
-- Note: a future iteration may add first-class `EXPECTED_MISSING` support. Until then, missing methods
-  always count towards the exit-code-1 condition.
+- Document them in `expected_diffs.toml` by setting `expected_missing = true`.
+
+```toml
+[[expected]]
+method = "getnetworkinfo"
+reason = "Zallet does not plan to implement this endpoint yet."
+expected_missing = true
+```
+
+The engine will then classify the gap as `EXPECTED_MISSING` and return exit code 0.
 
 ### Per-request timeout errors (ERROR with "timeout")
 
