@@ -107,4 +107,20 @@ impl MockNode {
             .mount(&self.server)
             .await;
     }
+
+    /// Mocks a fallback response for all unhandled requests, returning Method Not Found.
+    pub async fn mock_fallback(&self) {
+        Mock::given(wiremock::matchers::any())
+            .respond_with(|req: &Request| {
+                let body: Value = serde_json::from_slice(&req.body).unwrap_or(Value::Null);
+                let id = body.get("id").cloned().unwrap_or(json!(1));
+                ResponseTemplate::new(200).set_body_json(json!({
+                    "jsonrpc": "2.0",
+                    "error": { "code": -32601, "message": "Method not found" },
+                    "id": id
+                }))
+            })
+            .mount(&self.server)
+            .await;
+    }
 }

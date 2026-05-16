@@ -208,6 +208,7 @@ async fn main() -> ExitCode {
 ///
 /// Delegates each phase to a focused helper so changes to one phase
 /// (e.g. adding a new output format) do not ripple into unrelated code.
+#[allow(clippy::too_many_arguments)]
 async fn run_parity_check(
     upstream_url: String,
     target_url: String,
