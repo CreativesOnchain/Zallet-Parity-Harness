@@ -14,6 +14,7 @@ The Zallet RPC Parity Harness (`zallet-rpc-diff`) runs a versioned suite of wall
 - ❌ **DIFF**: The responses differ at specific, unexpected JSON paths.
 - 📋 **EXPECTED_DIFF**: The responses differ, but the divergence is known and documented in the expected-differences configuration.
 - 🔍 **MISSING**: One of the endpoints does not implement the method (typically Zallet).
+- 📉 **EXPECTED_MISSING**: The method is marked as `expected_missing = true` in `expected_diffs.toml`.
 - ⚠️ **ERROR**: A transport failure or an unexpected RPC error occurred.
 
 ## Quick Start
@@ -61,7 +62,7 @@ When the tool finishes running, it outputs a detailed machine-readable `report.j
 
 ```text
 ✅ Parity check complete!
-   24 total | ✅ 18 match | ❌ 2 diff | 📋 3 expected | 🔍 1 missing | ⚠️ 0 error
+   24 total | ✅ 18 match | ❌ 2 diff | 📋 3 expected | 🔍 1 missing | 📋 0 exp-missing | ⚠️ 0 error
    Report: report.json
    Report: report.md
 
