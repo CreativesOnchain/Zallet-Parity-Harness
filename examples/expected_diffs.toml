@@ -50,3 +50,20 @@ diff_paths = ["/walletname", "/descriptors", "/avoid_reuse", "/scanning"]
 method = "getdeprecationinfo"
 reason = "zcashd's getdeprecationinfo is tied to its release/deprecation cycle; Zallet returns different values or may not implement this method yet."
 diff_paths = []
+
+# ─────────────────────────────────────────────────────────────────────────────
+# EXPECTED_MISSING examples
+# Use expected_missing = true for methods Zallet has not yet implemented.
+# The engine will classify these as EXPECTED_MISSING (not MISSING),
+# so they do not trigger exit code 1 in CI.
+# ─────────────────────────────────────────────────────────────────────────────
+
+# [[expected]]
+# method = "z_getaddressforaccount"
+# reason = "Not yet implemented in Zallet. Tracked in ECC issue #1234."
+# expected_missing = true
+
+# [[expected]]
+# method = "z_getnewaddress"
+# reason = "Unified address support is in-progress. Expected Q2 2025."
+# expected_missing = true

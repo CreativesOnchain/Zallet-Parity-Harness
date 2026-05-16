@@ -25,13 +25,14 @@ pub struct RunSummary {
     pub diffs: usize,
     pub expected_diffs: usize,
     pub missing: usize,
+    pub expected_missing: usize,
     pub errors: usize,
 }
 
 /// The serialized form of a single method's parity result.
 ///
 /// The `type` tag distinguishes the variant in JSON:
-/// `"match"`, `"diff"`, `"expected_diff"`, `"missing"`, `"error"`
+/// `"match"`, `"diff"`, `"expected_diff"`, `"missing"`, `"expected_missing"`, `"error"`
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum ParityResultReport {
@@ -53,6 +54,12 @@ pub enum ParityResultReport {
     Missing {
         method: String,
     },
+    /// Method is missing on Zallet and declared `expected_missing = true` in config.
+    /// Not a blocker — treated like ExpectedDiff but for missing methods.
+    ExpectedMissing {
+        method: String,
+        reason: String,
+    },
     Error {
         message: String,
     },
@@ -67,6 +74,7 @@ impl FinalReport {
         let mut diffs = 0usize;
         let mut expected_diffs = 0usize;
         let mut missing = 0usize;
+        let mut expected_missing = 0usize;
         let mut errors = 0usize;
         let mut details = BTreeMap::new();
 
@@ -77,6 +85,7 @@ impl FinalReport {
                 &mut diffs,
                 &mut expected_diffs,
                 &mut missing,
+                &mut expected_missing,
                 &mut errors,
             );
             details.insert(method, report_res);
@@ -91,6 +100,7 @@ impl FinalReport {
                 diffs,
                 expected_diffs,
                 missing,
+                expected_missing,
                 errors,
             },
             details,
@@ -163,7 +173,20 @@ fn unix_secs_to_datetime(secs: u64) -> (u64, u64, u64, u64, u64, u64) {
         days -= days_in_year;
         y += 1;
     }
-    let months = [31, if is_leap(y) { 29 } else { 28 }, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31];
+    let months = [
+        31,
+        if is_leap(y) { 29 } else { 28 },
+        31,
+        30,
+        31,
+        30,
+        31,
+        31,
+        30,
+        31,
+        30,
+        31,
+    ];
     let mut mo = 1u64;
     for m in months {
         if days < m {
@@ -176,7 +199,7 @@ fn unix_secs_to_datetime(secs: u64) -> (u64, u64, u64, u64, u64, u64) {
 }
 
 fn is_leap(y: u64) -> bool {
-    (y % 4 == 0 && y % 100 != 0) || y % 400 == 0
+    (y.is_multiple_of(4) && !y.is_multiple_of(100)) || y.is_multiple_of(400)
 }
 
 // ── Construction helpers ──────────────────────────────────────────────────────
@@ -189,6 +212,7 @@ fn classify_result(
     diffs: &mut usize,
     expected_diffs: &mut usize,
     missing: &mut usize,
+    expected_missing: &mut usize,
     errors: &mut usize,
 ) -> ParityResultReport {
     match res {
@@ -220,6 +244,10 @@ fn classify_result(
             *missing += 1;
             ParityResultReport::Missing { method: m }
         }
+        ParityResult::ExpectedMissing { method: m, reason } => {
+            *expected_missing += 1;
+            ParityResultReport::ExpectedMissing { method: m, reason }
+        }
         ParityResult::Error(message) => {
             *errors += 1;
             ParityResultReport::Error { message }
@@ -243,12 +271,14 @@ fn render_summary_section(s: &RunSummary) -> String {
          - **❌ Diffs**: {diffs}\n\
          - **📋 Expected Diffs**: {expected_diffs}\n\
          - **🔍 Missing**: {missing}\n\
+         - **📋 Expected Missing**: {expected_missing}\n\
          - **⚠️ Errors**: {errors}\n\n",
         total = s.total,
         matches = s.matches,
         diffs = s.diffs,
         expected_diffs = s.expected_diffs,
         missing = s.missing,
+        expected_missing = s.expected_missing,
         errors = s.errors,
     )
 }
@@ -304,6 +334,10 @@ fn format_result_row(res: &ParityResultReport) -> (&'static str, String) {
         ParityResultReport::Missing { method } => (
             "🔍 Missing",
             format!("Method `{}` not found on one endpoint", method),
+        ),
+        ParityResultReport::ExpectedMissing { method, reason } => (
+            "📋 Expected Missing",
+            format!("Method `{}` not yet in Zallet — _{}_", method, reason),
         ),
         ParityResultReport::Error { message } => ("⚠️ Error", message.clone()),
     }

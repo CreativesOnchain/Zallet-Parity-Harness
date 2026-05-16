@@ -126,6 +126,39 @@ enum Commands {
             help = "Max concurrent RPC calls (default: 8)"
         )]
         concurrency: usize,
+
+        /// Only run methods whose manifest `tags` include at least one of these values.
+        ///
+        /// Comma-separated or repeatable: `--tags wallet --tags shielded`
+        /// If omitted, all methods in the manifest are run.
+        #[arg(
+            long,
+            value_name = "TAG",
+            num_args = 1..,
+            help = "Only run methods with one of these tags (comma-sep or repeatable)"
+        )]
+        tags: Vec<String>,
+
+        /// Skip methods whose manifest `tags` include any of these values.
+        ///
+        /// Comma-separated or repeatable: `--exclude-tags mining`
+        #[arg(
+            long,
+            value_name = "TAG",
+            num_args = 1..,
+            help = "Skip methods that have any of these tags"
+        )]
+        exclude_tags: Vec<String>,
+
+        /// Validate configuration and print the filtered method list, then exit.
+        ///
+        /// Does not connect to any RPC endpoint. Useful for verifying
+        /// that `--tags` / `--exclude-tags` filters select the intended methods.
+        #[arg(
+            long,
+            help = "Print the filtered method list and exit without making RPC calls"
+        )]
+        dry_run: bool,
     },
 }
 
@@ -146,13 +179,26 @@ async fn main() -> ExitCode {
             expected_diffs,
             output,
             concurrency,
-        } => run_parity_check(upstream_url, target_url, manifest, expected_diffs, output, concurrency)
-            .await
-            .unwrap_or_else(|e| {
-                eprintln!("\n❌ Fatal error: {:#}", e);
-                eprintln!("   Run with RUST_LOG=debug for more detail.");
-                ExitCode::from(EXIT_TOOL_FAILURE)
-            }),
+            tags,
+            exclude_tags,
+            dry_run,
+        } => run_parity_check(
+            upstream_url,
+            target_url,
+            manifest,
+            expected_diffs,
+            output,
+            concurrency,
+            tags,
+            exclude_tags,
+            dry_run,
+        )
+        .await
+        .unwrap_or_else(|e| {
+            eprintln!("\n❌ Fatal error: {:#}", e);
+            eprintln!("   Run with RUST_LOG=debug for more detail.");
+            ExitCode::from(EXIT_TOOL_FAILURE)
+        }),
     }
 }
 
@@ -169,15 +215,53 @@ async fn run_parity_check(
     expected_diffs_path: PathBuf,
     output_path: PathBuf,
     concurrency: usize,
+    tags: Vec<String>,
+    exclude_tags: Vec<String>,
+    dry_run: bool,
 ) -> Result<ExitCode> {
-    print_header(&upstream_url, &target_url, concurrency);
+    print_header(
+        &upstream_url,
+        &target_url,
+        concurrency,
+        &tags,
+        &exclude_tags,
+    );
 
     let manifest = load_manifest(&manifest_path)?;
+    // Apply tag filters before running
+    let manifest = manifest
+        .filter_by_tags(&tags)
+        .filter_exclude_tags(&exclude_tags);
+
     let expected_diffs = load_expected_diffs(&expected_diffs_path)?;
+
+    if dry_run {
+        println!("\n🔍 Dry-run mode — no RPC calls will be made.");
+        println!("   {} method(s) selected:", manifest.methods.len());
+        for m in &manifest.methods {
+            let tag_str = if m.tags.is_empty() {
+                String::new()
+            } else {
+                format!(" [{}]", m.tags.join(", "))
+            };
+            println!("   • {}{}", m.name, tag_str);
+        }
+        return Ok(ExitCode::from(EXIT_CLEAN));
+    }
+
+    if manifest.methods.is_empty() {
+        eprintln!(
+            "\n⚠️  No methods selected after filtering. Check your --tags / --exclude-tags arguments."
+        );
+        return Ok(ExitCode::from(EXIT_TOOL_FAILURE));
+    }
+
     let engine = build_engine(&upstream_url, &target_url)?;
 
     let pb = build_progress_bar(manifest.methods.len())?;
-    let results = engine.run_all(manifest.methods, &expected_diffs, concurrency).await;
+    let results = engine
+        .run_all(manifest.methods, &expected_diffs, concurrency)
+        .await;
     pb.finish_and_clear();
 
     let report = FinalReport::new(results);
@@ -192,11 +276,23 @@ async fn run_parity_check(
 // ── Phase helpers ─────────────────────────────────────────────────────────────
 
 /// Prints the startup banner showing which endpoints will be compared.
-fn print_header(upstream_url: &str, target_url: &str, concurrency: usize) {
+fn print_header(
+    upstream_url: &str,
+    target_url: &str,
+    concurrency: usize,
+    tags: &[String],
+    exclude_tags: &[String],
+) {
     println!("\u{1f680} Starting Zallet Parity Check");
     println!("   Upstream:    {}", upstream_url);
     println!("   Target:      {}", target_url);
     println!("   Concurrency: {}", concurrency);
+    if !tags.is_empty() {
+        println!("   Tags:        {}", tags.join(", "));
+    }
+    if !exclude_tags.is_empty() {
+        println!("   Exclude:     {}", exclude_tags.join(", "));
+    }
     println!();
 }
 
@@ -294,8 +390,8 @@ fn write_reports(report: &FinalReport, json_path: &Path) -> Result<()> {
 fn print_summary(s: &RunSummary, json_path: &Path, md_path: &Path) {
     println!("✅ Parity check complete!");
     println!(
-        "   {} total | ✅ {} match | ❌ {} diff | 📋 {} expected | 🔍 {} missing | ⚠️  {} error",
-        s.total, s.matches, s.diffs, s.expected_diffs, s.missing, s.errors
+        "   {} total | ✅ {} match | ❌ {} diff | 📋 {} expected | 🔍 {} missing | 📋 {} exp-missing | ⚠️  {} error",
+        s.total, s.matches, s.diffs, s.expected_diffs, s.missing, s.expected_missing, s.errors
     );
     println!("   Report: {}", json_path.display());
     println!("   Report: {}", md_path.display());
@@ -314,6 +410,9 @@ fn print_summary(s: &RunSummary, json_path: &Path, md_path: &Path) {
         eprintln!(
             "🔍 {} method(s) missing on one endpoint — Zallet may not implement them yet.",
             s.missing
+        );
+        eprintln!(
+            "   To silence: add an entry with expected_missing = true to expected_diffs.toml."
         );
     }
     if s.errors > 0 {

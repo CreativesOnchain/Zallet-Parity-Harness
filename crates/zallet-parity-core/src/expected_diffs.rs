@@ -22,6 +22,13 @@
 //! method = "getnetworkinfo"
 //! reason = "Zallet reports a different version string."
 //! diff_paths = ["/version", "/subversion"]
+//!
+//! # Methods not yet implemented by Zallet: set expected_missing = true.
+//! # The engine will classify these as EXPECTED_MISSING instead of MISSING.
+//! [[expected]]
+//! method = "z_getaddressforaccount"
+//! reason = "Not yet implemented in Zallet."
+//! expected_missing = true
 //! ```
 
 use crate::{Error, Result};
@@ -42,6 +49,11 @@ pub struct ExpectedDiffEntry {
     ///   diffs at other paths will still be classified as `DIFF`.
     #[serde(default)]
     pub diff_paths: Vec<String>,
+    /// If `true`, this method is expected to return "method not found" (`-32601`)
+    /// on the target (Zallet). The engine will classify it as `EXPECTED_MISSING`
+    /// rather than `MISSING`. Set this for methods Zallet has not yet implemented.
+    #[serde(default)]
+    pub expected_missing: bool,
 }
 
 /// The top-level expected-differences file structure.
@@ -78,6 +90,16 @@ impl ExpectedDiffs {
         actual_diff_paths: &[String],
     ) -> Option<&ExpectedDiffEntry> {
         find_covering_entry(method, actual_diff_paths, &self.expected)
+    }
+
+    /// Returns the `expected_missing` entry for `method`, if one exists.
+    ///
+    /// Use this to classify a `MISSING` result as `EXPECTED_MISSING` when
+    /// the operator has declared that Zallet has not yet implemented the method.
+    pub fn is_expected_missing(&self, method: &str) -> Option<&ExpectedDiffEntry> {
+        self.expected
+            .iter()
+            .find(|e| e.method == method && e.expected_missing)
     }
 }
 
@@ -238,5 +260,53 @@ reason = "Some diff."
     fn test_none_returns_empty() {
         let ed = ExpectedDiffs::none();
         assert!(ed.is_expected("anymethod", &[]).is_none());
+    }
+
+    // ── expected_missing ──────────────────────────────────────────────────────
+
+    #[test]
+    fn test_expected_missing_flag_is_recognized() {
+        let ed = load_from_str(
+            r#"
+[[expected]]
+method = "z_getaddressforaccount"
+reason = "Not yet implemented in Zallet."
+expected_missing = true
+"#,
+        );
+        assert!(ed.is_expected_missing("z_getaddressforaccount").is_some());
+        assert_eq!(
+            ed.is_expected_missing("z_getaddressforaccount")
+                .unwrap()
+                .reason,
+            "Not yet implemented in Zallet."
+        );
+    }
+
+    #[test]
+    fn test_expected_missing_false_is_not_returned() {
+        let ed = load_from_str(
+            r#"
+[[expected]]
+method = "getblockchaininfo"
+reason = "Some diff."
+diff_paths = ["/softforks"]
+"#,
+        );
+        // expected_missing defaults to false — should NOT appear
+        assert!(ed.is_expected_missing("getblockchaininfo").is_none());
+    }
+
+    #[test]
+    fn test_expected_missing_wrong_method_does_not_match() {
+        let ed = load_from_str(
+            r#"
+[[expected]]
+method = "z_getaddressforaccount"
+reason = "Not yet implemented."
+expected_missing = true
+"#,
+        );
+        assert!(ed.is_expected_missing("getblockchaininfo").is_none());
     }
 }

@@ -33,7 +33,7 @@ impl MockNode {
         let p = match (params_arr, expected_params) {
             // No-params call: empty array matches Value::Null expectation
             (None, Value::Null) | (Some(_), Value::Null) => {
-                params_arr.map_or(true, |arr| arr.is_empty())
+                params_arr.is_none_or(|arr| arr.is_empty())
             }
             // Positional-params call: first element must equal the expectation
             (Some(arr), expected) => arr.first() == Some(expected),

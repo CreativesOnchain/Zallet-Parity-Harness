@@ -35,8 +35,12 @@ pub enum ParityResult {
         diff_entries: Vec<DiffEntry>,
         reason: String,
     },
-    /// One or both endpoints returned -32601 "method not found".
+    /// One or both endpoints returned -32601 "method not found",
+    /// and it was NOT listed as `expected_missing` in the config.
     Missing { method: String },
+    /// The method returned -32601 and was declared `expected_missing = true`
+    /// in `expected_diffs.toml`. Not a blocker.
+    ExpectedMissing { method: String, reason: String },
     /// A transport failure or non-missing RPC error occurred.
     Error(String),
 }
@@ -172,7 +176,7 @@ fn classify_rpc_results(
             let diff_entries = diff_values(&u_norm, &t_norm);
             classify_diff(diff_entries, method_name, expected_entries)
         }
-        (err_u, err_t) => classify_error_pair(err_u, err_t, method_name),
+        (err_u, err_t) => classify_error_pair(err_u, err_t, method_name, expected_entries),
     }
 }
 
@@ -228,29 +232,43 @@ fn find_expected_entry<'a>(
 
 /// Classifies a result pair where at least one side returned an error.
 ///
-/// Method-not-found errors (-32601) from either side become `Missing`.
-/// All other errors become `Error` with a directional prefix.
+/// If the error is method-not-found (-32601) and `expected_entries` contains
+/// an `expected_missing = true` entry for this method, returns `ExpectedMissing`.
+/// Otherwise returns `Missing` (for method-not-found) or `Error`.
 fn classify_error_pair(
     res_u: Result<Value, Error>,
     res_t: Result<Value, Error>,
     method_name: &str,
+    expected_entries: &[ExpectedDiffEntry],
 ) -> ParityResult {
-    match (&res_u, &res_t) {
-        // Both sides: method not found
-        (Err(e_u), Err(e_t)) if is_method_not_found(e_u) && is_method_not_found(e_t) => {
-            ParityResult::Missing {
+    let is_missing = matches!((&res_u, &res_t),
+        (Err(e_u), Err(e_t)) if is_method_not_found(e_u) && is_method_not_found(e_t)
+    ) || matches!((&res_u, &res_t),
+        (Err(e), _) | (_, Err(e)) if is_method_not_found(e)
+    );
+
+    if is_missing {
+        // Check for expected_missing declaration in config.
+        if let Some(entry) = expected_entries
+            .iter()
+            .find(|e| e.method == method_name && e.expected_missing)
+        {
+            return ParityResult::ExpectedMissing {
                 method: method_name.to_string(),
-            }
+                reason: entry.reason.clone(),
+            };
         }
-        // Only one side: method not found
-        (Err(e), _) | (_, Err(e)) if is_method_not_found(e) => ParityResult::Missing {
+        return ParityResult::Missing {
             method: method_name.to_string(),
-        },
+        };
+    }
+
+    match (&res_u, &res_t) {
         // Upstream transport/RPC error
         (Err(e), _) => ParityResult::Error(format!("Upstream error: {}", e)),
         // Target transport/RPC error
         (_, Err(e)) => ParityResult::Error(format!("Target error: {}", e)),
-        // Both Ok — should not reach here; caller is responsible for routing correctly.
+        // Both Ok — should not reach here.
         (Ok(_), Ok(_)) => unreachable!("classify_error_pair called with two Ok results"),
     }
 }
@@ -322,7 +340,9 @@ mod tests {
             RpcClient::new(&u.url()).unwrap(),
             RpcClient::new(&t.url()).unwrap(),
         );
-        let results = engine.run_all(vec![entry(method)], &no_expected(), DEFAULT_CONCURRENCY).await;
+        let results = engine
+            .run_all(vec![entry(method)], &no_expected(), DEFAULT_CONCURRENCY)
+            .await;
         assert_eq!(results.len(), 1);
         assert!(matches!(results[0].1, ParityResult::Match));
     }
@@ -342,7 +362,9 @@ mod tests {
             RpcClient::new(&u.url()).unwrap(),
             RpcClient::new(&t.url()).unwrap(),
         );
-        let results = engine.run_all(vec![entry(method)], &no_expected(), DEFAULT_CONCURRENCY).await;
+        let results = engine
+            .run_all(vec![entry(method)], &no_expected(), DEFAULT_CONCURRENCY)
+            .await;
         assert_eq!(results.len(), 1);
         assert!(
             matches!(results[0].1, ParityResult::Match),
@@ -366,7 +388,9 @@ mod tests {
             RpcClient::new(&u.url()).unwrap(),
             RpcClient::new(&t.url()).unwrap(),
         );
-        let results = engine.run_all(vec![entry(method)], &no_expected(), DEFAULT_CONCURRENCY).await;
+        let results = engine
+            .run_all(vec![entry(method)], &no_expected(), DEFAULT_CONCURRENCY)
+            .await;
         assert_eq!(results.len(), 1);
         if let ParityResult::Diff { diff_entries } = &results[0].1 {
             assert_eq!(diff_entries.len(), 1);
@@ -393,6 +417,7 @@ mod tests {
                 method: method.to_string(),
                 reason: "Zallet reports a different version string.".to_string(),
                 diff_paths: vec![], // method-level: any diff is expected
+                expected_missing: false,
             }],
         };
 
@@ -400,7 +425,9 @@ mod tests {
             RpcClient::new(&u.url()).unwrap(),
             RpcClient::new(&t.url()).unwrap(),
         );
-        let results = engine.run_all(vec![entry(method)], &expected, DEFAULT_CONCURRENCY).await;
+        let results = engine
+            .run_all(vec![entry(method)], &expected, DEFAULT_CONCURRENCY)
+            .await;
         assert_eq!(results.len(), 1);
         if let ParityResult::ExpectedDiff { reason, .. } = &results[0].1 {
             assert!(reason.contains("version"));
@@ -434,6 +461,7 @@ mod tests {
                 method: method.to_string(),
                 reason: "Zallet omits softforks field.".to_string(),
                 diff_paths: vec!["/softforks".to_string()],
+                expected_missing: false,
             }],
         };
 
@@ -441,7 +469,9 @@ mod tests {
             RpcClient::new(&u.url()).unwrap(),
             RpcClient::new(&t.url()).unwrap(),
         );
-        let results = engine.run_all(vec![entry(method)], &expected, DEFAULT_CONCURRENCY).await;
+        let results = engine
+            .run_all(vec![entry(method)], &expected, DEFAULT_CONCURRENCY)
+            .await;
         assert_eq!(results.len(), 1);
         assert!(
             matches!(results[0].1, ParityResult::ExpectedDiff { .. }),
@@ -475,6 +505,7 @@ mod tests {
                 method: method.to_string(),
                 reason: "Only softforks is expected.".to_string(),
                 diff_paths: vec!["/softforks".to_string()],
+                expected_missing: false,
             }],
         };
 
@@ -482,7 +513,9 @@ mod tests {
             RpcClient::new(&u.url()).unwrap(),
             RpcClient::new(&t.url()).unwrap(),
         );
-        let results = engine.run_all(vec![entry(method)], &expected, DEFAULT_CONCURRENCY).await;
+        let results = engine
+            .run_all(vec![entry(method)], &expected, DEFAULT_CONCURRENCY)
+            .await;
         assert_eq!(results.len(), 1);
         assert!(
             matches!(results[0].1, ParityResult::Diff { .. }),
@@ -543,7 +576,9 @@ mod tests {
             RpcClient::new(&u.url()).unwrap(),
             RpcClient::new(&t.url()).unwrap(),
         );
-        let results = engine.run_all(vec![entry(method)], &no_expected(), DEFAULT_CONCURRENCY).await;
+        let results = engine
+            .run_all(vec![entry(method)], &no_expected(), DEFAULT_CONCURRENCY)
+            .await;
         assert_eq!(results.len(), 1);
         assert!(
             matches!(&results[0].1, ParityResult::Missing { method: m } if m == method),
@@ -567,11 +602,76 @@ mod tests {
             RpcClient::new(&u.url()).unwrap(),
             RpcClient::new(&t.url()).unwrap(),
         );
-        let results = engine.run_all(vec![entry(method)], &no_expected(), DEFAULT_CONCURRENCY).await;
+        let results = engine
+            .run_all(vec![entry(method)], &no_expected(), DEFAULT_CONCURRENCY)
+            .await;
         assert_eq!(results.len(), 1);
         assert!(
             matches!(&results[0].1, ParityResult::Error(msg) if msg.contains("Upstream error")),
             "expected Error, got {:?}",
+            results[0].1
+        );
+    }
+
+    // ── EXPECTED_MISSING ──────────────────────────────────────────────────────
+
+    #[tokio::test]
+    async fn test_parity_expected_missing_is_classified_correctly() {
+        let u = MockNode::spawn().await;
+        let t = MockNode::spawn().await;
+        let method = "test_expected_missing";
+        u.mock_response(method, json!(null), json!({"ok": true}))
+            .await;
+        t.mock_method_not_found(method, json!(null)).await;
+
+        let expected = ExpectedDiffs {
+            expected: vec![ExpectedDiffEntry {
+                method: method.to_string(),
+                reason: "Not yet implemented in Zallet.".to_string(),
+                diff_paths: vec![],
+                expected_missing: true,
+            }],
+        };
+
+        let engine = ParityEngine::new(
+            RpcClient::new(&u.url()).unwrap(),
+            RpcClient::new(&t.url()).unwrap(),
+        );
+        let results = engine
+            .run_all(vec![entry(method)], &expected, DEFAULT_CONCURRENCY)
+            .await;
+        assert_eq!(results.len(), 1);
+        assert!(
+            matches!(
+                &results[0].1,
+                ParityResult::ExpectedMissing { method: m, reason: r }
+                    if m == method && r.contains("Not yet implemented")
+            ),
+            "expected ExpectedMissing, got {:?}",
+            results[0].1
+        );
+    }
+
+    #[tokio::test]
+    async fn test_parity_missing_without_expected_flag_stays_missing() {
+        // Same setup, but NO expected_missing entry — should remain MISSING.
+        let u = MockNode::spawn().await;
+        let t = MockNode::spawn().await;
+        let method = "test_unexpected_missing";
+        u.mock_response(method, json!(null), json!({"ok": true}))
+            .await;
+        t.mock_method_not_found(method, json!(null)).await;
+
+        let engine = ParityEngine::new(
+            RpcClient::new(&u.url()).unwrap(),
+            RpcClient::new(&t.url()).unwrap(),
+        );
+        let results = engine
+            .run_all(vec![entry(method)], &no_expected(), DEFAULT_CONCURRENCY)
+            .await;
+        assert!(
+            matches!(&results[0].1, ParityResult::Missing { .. }),
+            "expected Missing (no expected_missing entry), got {:?}",
             results[0].1
         );
     }
@@ -588,13 +688,17 @@ mod tests {
         let t = MockNode::spawn().await;
         let method = "test_null_params";
         // testkit matches the first element; json!(null) means no-params sentinel
-        u.mock_response(method, json!(null), json!({"ok": true})).await;
-        t.mock_response(method, json!(null), json!({"ok": true})).await;
+        u.mock_response(method, json!(null), json!({"ok": true}))
+            .await;
+        t.mock_response(method, json!(null), json!({"ok": true}))
+            .await;
         let engine = ParityEngine::new(
             RpcClient::new(&u.url()).unwrap(),
             RpcClient::new(&t.url()).unwrap(),
         );
-        let results = engine.run_all(vec![entry(method)], &no_expected(), DEFAULT_CONCURRENCY).await;
+        let results = engine
+            .run_all(vec![entry(method)], &no_expected(), DEFAULT_CONCURRENCY)
+            .await;
         assert!(
             matches!(results[0].1, ParityResult::Match),
             "null-params method should MATCH, got: {:?}",
@@ -610,15 +714,17 @@ mod tests {
         let method = "test_array_params";
         // testkit matches first element of the params array sent over the wire.
         // If params were double-wrapped it would be [""] not "" -> mock no-match -> ERROR.
-        u.mock_response(method, json!(""), json!({"ok": true})).await;
-        t.mock_response(method, json!(""), json!({"ok": true})).await;
+        u.mock_response(method, json!(""), json!({"ok": true}))
+            .await;
+        t.mock_response(method, json!(""), json!({"ok": true}))
+            .await;
         let engine = ParityEngine::new(
             RpcClient::new(&u.url()).unwrap(),
             RpcClient::new(&t.url()).unwrap(),
         );
         let results = engine
             .run_all(
-                vec![entry_with_params(method, json!([""])),],
+                vec![entry_with_params(method, json!([""]))],
                 &no_expected(),
                 DEFAULT_CONCURRENCY,
             )
@@ -636,8 +742,10 @@ mod tests {
         let u = MockNode::spawn().await;
         let t = MockNode::spawn().await;
         let method = "test_scalar_params";
-        u.mock_response(method, json!("myaddr"), json!({"ok": true})).await;
-        t.mock_response(method, json!("myaddr"), json!({"ok": true})).await;
+        u.mock_response(method, json!("myaddr"), json!({"ok": true}))
+            .await;
+        t.mock_response(method, json!("myaddr"), json!({"ok": true}))
+            .await;
         let engine = ParityEngine::new(
             RpcClient::new(&u.url()).unwrap(),
             RpcClient::new(&t.url()).unwrap(),
@@ -668,7 +776,12 @@ mod tests {
             vec![
                 ("z_method".to_string(), ParityResult::Match),
                 ("a_method".to_string(), ParityResult::Match),
-                ("m_method".to_string(), ParityResult::Diff { diff_entries: vec![] }),
+                (
+                    "m_method".to_string(),
+                    ParityResult::Diff {
+                        diff_entries: vec![],
+                    },
+                ),
             ]
         };
 
