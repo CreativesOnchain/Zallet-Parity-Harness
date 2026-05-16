@@ -86,3 +86,48 @@ jobs:
             ${{ runner.os }}-cargo-
       - name: Build
         run: cargo build --workspace --locked --release
+
+  e2e:
+    name: End-to-End Mock Validation
+    runs-on: ubuntu-latest
+    needs: build
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+      - name: Run Mock Nodes
+        run: |
+          cargo run --bin zallet-mock-nodes > mock-nodes.log 2>&1 &
+          
+          # Wait for nodes to start and print URLs
+          echo "Waiting for mock nodes to start..."
+          for i in {1..30}; do
+            if grep -q "✅ Nodes are running!" mock-nodes.log; then
+              break
+            fi
+            sleep 1
+          done
+          
+          cat mock-nodes.log
+          
+          UPSTREAM=$(grep "Upstream (zcashd mock):" mock-nodes.log | awk '{print $4}')
+          TARGET=$(grep "Target   (Zallet mock):" mock-nodes.log | awk '{print $4}')
+          
+          if [ -z "$UPSTREAM" ] || [ -z "$TARGET" ]; then
+            echo "Failed to extract URLs from mock server output"
+            exit 1
+          fi
+          
+          echo "UPSTREAM_URL=$UPSTREAM" >> $GITHUB_ENV
+          echo "TARGET_URL=$TARGET" >> $GITHUB_ENV
+      - name: Run Parity Harness
+        run: |
+          # We run only the "network" tag which contains getconnectioncount (MATCH) 
+          # and getnetworkinfo (EXPECTED_DIFF). This should exit with 0.
+          cargo run --bin zallet-rpc-diff -- run \
+            --upstream-url ${{ env.UPSTREAM_URL }} \
+            --target-url ${{ env.TARGET_URL }} \
+            --manifest manifest.toml \
+            --expected-diffs examples/expected_diffs.toml \
+            --output report.json \
+            --tags network

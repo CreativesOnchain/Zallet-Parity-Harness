@@ -1,0 +1,286 @@
+﻿Project Summary
+Build a wallet JSON-RPC parity harness that runs a defined suite of wallet RPC calls against zcashd and Zallet (with the same keys) and produces normalized diff reports so compatibility gaps can be identified, triaged, and resolved during the zcashd → Zallet migration.
+Project Description
+Zcash is in an active transition where zcashd is being deprecated and Zallet is being built as the replacement wallet, with the reality that some JSON-RPC methods are expected to be drop-in, some require modified usage, and some will not be supported. In practice, migration risk is rarely “does the method exist”; it’s whether downstream automation still works when response fields, ordering, and error behavior differ.
+This project delivers a reproducible parity harness (CLI + method-suite manifests) that makes those differences measurable and actionable. It will:
+    • Run an allowlisted, versioned wallet RPC method suite against two endpoints (A=zcashd, B=Zallet), using the same wallet keys as the comparison baseline. Write a test harness for checking equivalence of zcashd and Zallet output zcash/wallet#16
+    • Output a machine-readable report and a short human summary, classifying each method as MATCH, DIFF, MISSING, or ERROR, with minimal, readable diffs.
+    • Include normalization + expected-differences configuration to avoid noisy false positives (e.g., harmless ordering or intentionally divergent fields) while still surfacing meaningful incompatibilities.
+    • Ship with tests and documentation so maintainers and operators can run it repeatedly and track progress over time.
+It does not promise to “make Zallet identical to zcashd,” but it provides the missing measurement and reporting layer that upstream has explicitly requested to locate differences and decide whether to fix or document them. A proven precedent exists for this approach in the ecosystem: Zebra already includes an RPC diff utility for comparing implementations; this project applies the same “diff-first” idea specifically to wallet RPC parity.
+Proposed Problem
+zcashd is being deprecated and Zallet is being built as the replacement wallet, but the migration reality is explicitly mixed: some JSON-RPC methods are expected to be drop-in, some require modified usage, and some will not be supported. That creates a high-stakes operational risk because a large amount of Zcash infrastructure relies on wallet JSON-RPC behavior, not just method names.
+The pain is that wallet RPC compatibility failures are expensive and late-breaking:
+    • Breakage is usually discovered only at integration time. Downstream systems (exchanges, custodians, services, automation scripts) often depend on exact response fields, output structure, and error behavior. Small differences can cause failures or require urgent patches, and the failures are hard to diagnose without a clear “what changed” report.
+    • Manual parity checking does not scale. Validating parity across many RPC methods by hand is slow, inconsistent, and difficult to reproduce. Teams end up re-testing the same things repeatedly, and issues are filed without a shared, minimal reproduction of the mismatch.
+    • There is no standard, repeatable parity harness today. Upstream has explicitly requested a test harness that can run a synced zcashd wallet and a Zallet wallet with the same keys and diff wallet JSON-RPC outputs to locate differences, but that tooling does not exist as a reusable, maintained tool.
+Without an automated, normalized diff harness, the ecosystem lacks a reliable way to measure wallet RPC migration readiness, prioritize the most disruptive gaps, and prevent regressions as Zallet evolves, making the zcashd → Zallet transition riskier and more time-consuming than it needs to be.
+Proposed Solution
+This project solves the wallet RPC migration risk by providing a repeatable parity harness that makes zcashd ↔ Zallet differences measurable, reproducible, and actionable instead of being discovered ad-hoc during integration.
+What we will build
+    1. A CLI parity runner (two endpoints, one method suite)
+    • Connect to two wallet JSON-RPC endpoints:
+        ◦ Endpoint A: zcashd wallet JSON-RPC
+        ◦ Endpoint B: Zallet JSON-RPC
+    • Execute a versioned allowlist of wallet RPC calls defined in a manifest (methods + parameter sets).
+    • Record results per method as MATCH, DIFF, MISSING, or ERROR.
+    2. Normalized diff reporting (so results are not noisy)
+    • Apply canonical JSON normalization (stable ordering and formatting) and configurable ignore paths to remove known non-essential variability.
+    • Support an expected-differences file so intentional divergences can be explicitly recorded, keeping reports focused on true migration blockers.
+    3. Actionable outputs for maintainers and operators
+    • Produce a machine-readable report (report.json) for tracking and automation, plus a short human summary that highlights:
+        ◦ the highest-impact diffs,
+        ◦ missing methods,
+        ◦ and error mismatches.
+    • Optionally retain raw responses behind a flag to support debugging without cluttering default output.
+    4. Tests + documentation so it can be used immediately
+    • Ship unit tests and fixture-based tests (mock JSON-RPC servers) to keep the tool stable without requiring heavy chain sync in CI.
+    • Provide a clear runbook for running the harness against real instances (a synced zcashd wallet and a Zallet wallet with the same keys), including how to interpret results and how to extend the method suite.
+Why this directly resolves the pain
+    • It turns “something broke” into “here is the exact RPC method and the exact field/error difference,” which reduces diagnosis time and makes fixes or documentation decisions straightforward.
+    • It gives the ecosystem a shared, repeatable way to measure migration readiness and prevent regressions as Zallet evolves, without claiming that Zallet must be identical to zcashd in all cases.
+Solution Format
+Format: Open-source software tooling (CLI + test harness) with supporting documentation and automated tests.
+Deliverables:
+    • CLI parity tool (e.g., zallet-rpc-diff) that runs a versioned wallet JSON-RPC method suite against two endpoints (zcashd and Zallet) and produces results classified as MATCH / DIFF / MISSING / ERROR.
+    • Versioned method-suite manifests (allowlisted wallet RPC calls + parameter sets) that can be expanded over time without code changes.
+    • Normalized diff reporting:
+        ◦ canonical JSON normalization
+        ◦ configurable ignore paths
+        ◦ an “expected differences” file format to track intentional divergences
+    • Reports and outputs:
+        ◦ machine-readable report.json for automation and tracking
+        ◦ a concise human-readable summary highlighting migration blockers
+        ◦ optional retention of raw responses for debugging (behind a flag)
+    • Automated tests (unit tests + fixture/mock JSON-RPC tests) to ensure deterministic behavior without requiring full chain sync in CI.
+    • Documentation/runbook:
+        ◦ quickstart instructions for running the tool against a synced zcashd wallet and a Zallet wallet with the same keys
+        ◦ guidance for interpreting results and adding new methods to the suite
+Dependencies
+Technical
+    • Local zcashd wallet JSON-RPC endpoint.
+    • Local Zallet JSON-RPC endpoint.
+    • Wallets prepared with the same keys (operator-provided; this project does not add a key-migration mechanism).
+    • Standard Rust build tooling and common libraries for JSON-RPC, JSON serialization, and diffing.
+CI / Environment
+    • GitHub Actions (or existing repo CI) for unit tests and fixture/mock JSON-RPC tests.
+    • Optional local Docker Compose helper for operators (not required for CI).
+Coordination
+    • Zallet maintainer input to:
+        ◦ choose where the tool lives in zcash/wallet,
+        ◦ approve the initial method-suite allowlist,
+        ◦ and confirm report/normalization defaults.
+Technical Approach
+We will implement a parity harness in Rust that compares wallet JSON-RPC behavior across two endpoints and produces a repeatable diff report. The goal is not to force identical behavior, but to make differences visible, reproducible, and easy to triage.
+1) Tool structure (CLI + data-driven method suite)
+    • Build a Rust CLI (e.g., zallet-rpc-diff) that accepts:
+        ◦ Endpoint A: zcashd wallet JSON-RPC (URL + auth)
+        ◦ Endpoint B: Zallet JSON-RPC (URL + auth)
+        ◦ A method-suite manifest (versioned allowlist of methods + parameter sets)
+        ◦ Optional: normalization config (ignore paths) + expected-differences file
+2) RPC execution engine
+    • Implement a JSON-RPC client with:
+        ◦ explicit per-request timeouts
+        ◦ clear error classification:
+            ▪ transport errors (connection/timeouts)
+            ▪ JSON-RPC error objects
+            ▪ method missing (e.g., “method not found”)
+    • For each method in the manifest, call both endpoints and capture:
+        ◦ raw response body (optional to persist to disk; off by default)
+        ◦ parsed JSON value (when present)
+        ◦ a sanitized error summary (no secrets)
+3) Normalization + expected-differences
+    • Before comparing, normalize JSON outputs to reduce false positives:
+        ◦ canonicalize object key ordering (sort keys) and formatting
+        ◦ apply configurable ignore paths (JSON Pointer paths removed before comparison)
+    • Support an expected-differences file so maintainers can mark:
+        ◦ known/intentional method-level differences, and/or
+        ◦ known field-level differences via ignore paths
+4) Diff + report generation (actionable outputs)
+    • For each method, classify outcome as:
+        ◦ MATCH (normalized outputs equal)
+        ◦ DIFF (normalized outputs differ)
+        ◦ MISSING (method absent on one side)
+        ◦ ERROR (call failed or returned non-comparable output)
+    • Produce:
+        ◦ report.json (machine-readable: per-method classification + minimal diff context)
+        ◦ a concise human-readable summary highlighting the most important diffs/missing methods/errors
+    • Optional flag to persist raw responses for debugging (disabled by default)
+5) Testing strategy
+    • Unit tests for:
+        ◦ manifest parsing
+        ◦ normalization + ignore path application
+        ◦ classification logic (MATCH/DIFF/MISSING/ERROR)
+    • Fixture/mock JSON-RPC tests:
+        ◦ run lightweight mock JSON-RPC servers that return fixed responses
+        ◦ verify report schema, normalization behavior, and expected-differences handling
+6) Documentation + maintainability
+    • Ship a runbook covering:
+        ◦ prerequisites for real parity runs (synced zcashd wallet + Zallet wallet with the same keys)
+        ◦ how to run the CLI, interpret results, and extend the method suite
+    • Keep the method suite as data (manifest) so maintainers can extend coverage via simple PRs.
+Upstream Merge Opportunities
+Upstream repositories to modify
+    • Primary: zcash/wallet (Zallet)
+Planned changes
+    • Add a Rust CLI parity harness (placed where maintainers prefer, e.g., tools/ or testing/) that:
+        ◦ runs a versioned wallet JSON-RPC method suite against two endpoints (zcashd and Zallet),
+        ◦ produces a report with MATCH / DIFF / MISSING / ERROR,
+        ◦ supports normalization (ignore paths) and an expected-differences file,
+        ◦ includes unit tests + fixture/mock JSON-RPC tests,
+        ◦ includes a short runbook and usage docs.
+Ecosystem benefit if merged upstream
+    • Provides a standard, repeatable way to measure wallet JSON-RPC migration readiness from zcashd to Zallet.
+    • Makes compatibility gaps reproducible and actionable by pinpointing the specific methods/fields/errors that differ.
+    • Helps maintainers and operators track progress and prevent regressions as Zallet evolves.
+Coordination needed
+    • Confirm with Zallet maintainers:
+        ◦ where the tool should live in the repo,
+        ◦ the initial method-suite allowlist for v1,
+        ◦ and the report/normalization defaults.
+    • Open a tracking issue (or comment on the existing request) and submit an early draft PR in Week 1 to validate interface choices.
+Timeline / merge considerations
+    • Week 1: align on structure + method-suite format; open draft PR.
+    • Weeks 2–5: implement runner + reporting + normalization + tests.
+    • Week 6: docs + review iteration; finalize as merged or merge-ready with tests passing.
+Hardware/Software Costs (USD)
+$0
+Hardware/Software Justification
+nil
+Service Costs (USD)
+$0
+Service Costs Justification
+nil
+Compensation Costs (USD)
+$20,000
+Compensation Costs Justification
+Compensation covers implementation, testing, documentation, and upstream review iteration for the parity harness.
+Effort allocation (estimated):
+    • CLI runner + method-suite manifest + report schema: 45–60 hours
+    • JSON-RPC execution + result classification (MATCH/DIFF/MISSING/ERROR): 35–45 hours
+    • Normalization + ignore paths + expected-differences support: 30–40 hours
+    • Tests (unit + fixture/mock JSON-RPC) + CI wiring: 30–40 hours
+    • Documentation + maintainer review iterations: 20–25 hours
+Total estimated effort: ~170–210 hours
+Total Budget (USD)
+$20,000
+Previous Funding
+No
+Previous Funding Details
+No response
+Other Funding Sources
+No
+Other Funding Sources Details
+No response
+Implementation Risks
+    • Comparable wallet setup is required (same keys, similar state)
+The harness is most useful when zcashd and Zallet are prepared with the same keys and a comparable state. Differences in setup can produce confusing results.
+Mitigation: provide a clear runbook and add lightweight preflight warnings where possible; always return per-method results (MATCH/DIFF/MISSING/ERROR) rather than failing the entire run.
+    • Noisy diffs from intentional or unstable fields
+Some outputs may differ for valid reasons, and some fields may vary between runs. Too much noise reduces usefulness.
+Mitigation: configurable normalization (canonical JSON + ignore paths) and an expected-differences file to record known/intentional deltas.
+    • Scope
+There is a risk of expanding from “measure and report” into “fix all differences,” which can exceed the budget and timeline.
+Mitigation: keep scope tooling-only: harness + reporting + tests + docs; parity fixes remain separate follow-ups.
+    • Upstream review/merge timing
+Landing in zcash/wallet depends on maintainer review bandwidth.
+Mitigation: open a tracking issue and submit an early draft PR, keep PRs small and well-tested, and deliver merge-ready work even if merge timing slips.
+Potential Side Effects
+    • False confidence if results are misinterpreted
+A report showing many “MATCH” results does not mean Zallet is a complete drop-in replacement for all downstream workflows, and a “DIFF” does not automatically mean a bug (some differences may be intentional).
+Mitigation: documentation will clearly explain what the harness does and does not guarantee, and how to use expected-differences/ignore rules to distinguish intentional vs unexpected gaps.
+    • Noisy reports if normalization/ignore rules are too permissive or too strict
+If ignore rules are overly broad, meaningful incompatibilities could be hidden; if too strict, the output may be noisy and harder to use.
+Mitigation: ship conservative defaults, keep ignore rules explicit and reviewable (in config files), and require that any expected-differences entries are documented.
+    • Exposure of sensitive data if raw responses are persisted carelessly
+Some wallet RPC responses may contain addresses or transaction-related data. Storing full raw responses could leak information if logs/artifacts are shared.
+Mitigation: raw response persistence will be off by default, clearly marked as local debugging only, and documentation will warn against uploading reports that contain sensitive fields.
+    • Operational overhead from running parity checks
+Running a large method suite repeatedly may add some CPU/network load on local nodes and wallets.
+Mitigation: allow operators to run a subset of methods, cap concurrency by default, and include timeouts so runs don’t hang.
+Success Metrics
+    • Tool delivered and usable in real parity runs
+        ◦ A maintainer/operator can run the CLI against a zcashd wallet JSON-RPC endpoint and a Zallet JSON-RPC endpoint (prepared with the same keys) and obtain a complete report without manual post-processing.
+    • Actionable, low-noise reporting
+        ◦ The report classifies each method as MATCH / DIFF / MISSING / ERROR, and normalization + ignore rules meaningfully reduce false diffs (with an expected-differences file available for intentional divergences).
+    • Method suite v1 shipped and documented
+        ◦ A versioned allowlist method-suite manifest is included, with clear instructions for adding new methods/parameter sets and for updating expected differences.
+    • Correctness is protected by automated tests
+        ◦ Unit tests + fixture/mock JSON-RPC tests cover manifest parsing, normalization, error classification, and report schema stability, and run in CI.
+    • Upstream integration outcome
+        ◦ PR(s) in zcash/wallet are merged, or are review-complete and explicitly approved/merge-ready with tests passing and documentation included.
+Startup Funding (USD)
+$0
+Startup Funding Justification
+nil
+    • Milestone: 1
+Amount (USD): 4000
+Expected Completion Date: 2026-03-15
+User Stories:
+        ◦ “As a Zallet maintainer, I want a clearly defined report format and method-suite manifest format, so that the tool is reviewable and stable to build on.”
+        ◦ “As an operator preparing for migration, I want explicit prerequisites and run inputs, so that I understand when results are meaningful and when they are not.”
+Deliverables:
+        ◦ Design note (in an issue or PR description) defining: result categories (MATCH / DIFF / MISSING / ERROR), report fields, and the method-suite manifest structure (method name + params + optional tags).
+        ◦ Rust crate + CLI skeleton added to zcash/wallet in a proposed location (e.g., tools/ or testing/), ready for maintainer preference.
+        ◦ Draft PR opened (skeleton + schemas + TODOs), so maintainers can comment early on naming, file layout, and output format.
+Acceptance Criteria: Maintainers can review the draft PR and design note; the crate builds successfully in CI (or local build instructions are validated if CI wiring is pending); the report/manifest formats are explicitly documented (no ambiguous “we’ll decide later”).
+    • Milestone: 2
+Amount (USD): 4500
+Expected Completion Date: 2026-03-29
+User Stories:
+        ◦ “As a maintainer, I want the tool to run the same wallet JSON-RPC call against two endpoints, so that parity can be evaluated method-by-method.”
+        ◦ “As a reviewer, I want consistent handling of transport vs JSON-RPC vs missing-method failures, so that results are trustworthy.”
+Deliverables:
+        ◦ Implement two-endpoint JSON-RPC execution with explicit per-request timeouts and clear error categorization (transport / JSON-RPC error / method missing).
+        ◦ Implement manifest-driven execution for a minimal method set and generate a valid report.json with MATCH/DIFF/MISSING/ERROR outcomes.
+        ◦ Add a small fixture/mock JSON-RPC test harness (local tests) to validate classification behavior without requiring chain sync.
+Acceptance Criteria: Running the tool against fixtures produces a report.json where at least one case is validated for each of: MATCH, DIFF, MISSING, ERROR, and the classification rules are documented in the repo (not implicit).
+    • Milestone: 3
+Amount (USD): 4000
+Expected Completion Date: 2026-04-12
+User Stories:
+        ◦ “As a maintainer, I want fewer false positives, so that diffs represent meaningful compatibility gaps rather than formatting noise.”
+        ◦ “As an operator, I want diffs that point to the specific field(s) that changed, so that triage is fast.”
+Deliverables:
+        ◦ Implement canonical JSON normalization prior to comparison (stable key ordering + consistent formatting).
+        ◦ Implement configurable ignore paths using JSON Pointer (remove specified paths before comparison).
+        ◦ Include minimal diff context in the report (e.g., list of differing JSON pointers and short summaries), without dumping entire payloads by default.
+        ◦ Unit tests that prove normalization removes ordering-only diffs and ignore paths behave correctly.
+Acceptance Criteria: With fixtures that differ only by key ordering/formatting, the tool reports MATCH after normalization; with fixtures that differ in a real field, the tool reports DIFF and identifies the changed path(s).
+    • Milestone: 4
+Amount (USD): 3500
+Expected Completion Date: 2026-04-26
+User Stories:
+        ◦ “As a maintainer, I want to record intentional differences, so that known divergences don’t drown out new problems.”
+        ◦ “As a reviewer, I want stable behavior verified in tests, so that changes don’t break reporting unexpectedly.”
+Deliverables:
+        ◦ Implement an expected-differences file format that can mark known/intentional differences (method-level and/or field-level).
+        ◦ Update reporting to clearly distinguish unexpected diffs from expected diffs (labeling and/or summary filtering, documented).
+        ◦ Add fixture/mock tests covering expected-differences behavior (expected diff remains visible but is not treated as an unexpected blocker).
+Acceptance Criteria: When an expected-differences entry is provided, the report labels/handles the diff as intended per documented rules, and tests demonstrate this deterministically using fixtures.
+    • Milestone: 5
+Amount (USD): 2500
+Expected Completion Date: 2026-05-10
+User Stories:
+        ◦ “As an operator, I want a clear runbook for real parity runs, so that I can run the harness against my own zcashd and Zallet instances correctly.”
+        ◦ “As a maintainer, I want an initial method-suite v1 that is reviewable and easy to extend via PRs, so coverage can grow safely.”
+Deliverables:
+        ◦ Draft method-suite v1 manifest (versioned) covering a practical set of wallet JSON-RPC calls for parity checking, prepared for maintainer review.
+        ◦ Runbook documentation: prerequisites (two endpoints, same keys), recommended invocation patterns, interpretation of MATCH/DIFF/MISSING/ERROR, and how to extend the suite.
+        ◦ Example config files (endpoints/auth placeholders) and a sample report generated from fixtures to illustrate output structure.
+Acceptance Criteria: Maintainers can review the method-suite v1 and runbook for correctness and scope; an operator can follow the runbook to produce a report in their environment (tool runs end-to-end, even if some methods return MISSING/ERROR depending on setup).
+    • Milestone: 6
+Amount (USD): 1500
+Expected Completion Date: 2026-11-20
+User Stories:
+        ◦ “As a maintainer, I want PR(s) that are merge-ready with tests passing, plus post-merge support, so the tool stays usable as Zallet evolves.”
+        ◦ “As an operator, I want timely fixes for high-severity issues discovered after adoption, so parity runs remain reliable during migration work.”
+Deliverables:
+        ◦ Finalization (by 2026-05-24): address review feedback; polish CLI UX (help text, error messages, exit codes); ensure unit + fixture/mock tests are green and integrated into repo CI; PR(s) merged or explicitly approved/merge-ready.
+        ◦ Maintenance window (90–180 days after finalization):
+            ▪ Triage new issues related to the harness (bug reports, false-diff reports, report-schema bugs).
+            ▪ Provide fixes for high-severity defects in the harness (crashes, incorrect classification, broken report output) as patch PRs.
+            ▪ Keep the method-suite tooling and report schema usable (small adjustments only; no major new features).
+Acceptance Criteria:
+        ◦ By 2026-05-24: CI is green for the PR(s); docs/configs match implemented flags/formats; PR(s) are merged or in a clearly merge-ready state.
+        ◦ During 90–180 day maintenance: issues are acknowledged and triaged promptly, and any high-severity defects attributable to the harness are addressed with upstream PRs (or documented workarounds) within the maintenance window.

@@ -1,22 +1,12 @@
-   Compiling zallet-parity-testkit v0.1.0 (/mnt/data/Projects/comb_zallet/Zallet/crates/zallet-parity-testkit)
-warning: unused import: `wiremock::Mock`
- --> crates/zallet-parity-testkit/src/bin/zallet-mock-nodes.rs:3:5
-  |
-3 | use wiremock::Mock;
-  |     ^^^^^^^^^^^^^^
-  |
-  = note: `#[warn(unused_imports)]` (part of `#[warn(unused)]`) on by default
-
-warning: `zallet-parity-testkit` (bin "zallet-mock-nodes") generated 1 warning (run `cargo fix --bin "zallet-mock-nodes" -p zallet-parity-testkit` to apply 1 suggestion)
-    Finished `dev` profile [unoptimized + debuginfo] target(s) in 6.10s
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.22s
      Running `target/debug/zallet-mock-nodes`
 🚀 Starting Zallet Parity Mock Nodes...
 
 ✅ Nodes are running!
-   Upstream (zcashd mock): http://127.0.0.1:44155
-   Target   (Zallet mock): http://127.0.0.1:40325
+   Upstream (zcashd mock): http://127.0.0.1:34197
+   Target   (Zallet mock): http://127.0.0.1:36299
 
 To test the parity harness, open a new terminal and run:
-cargo run -q -- run --upstream-url http://127.0.0.1:44155 --target-url http://127.0.0.1:40325 --manifest manifest.toml --expected-diffs examples/expected_diffs.toml --output report.json
+cargo run -q -- run --upstream-url http://127.0.0.1:34197 --target-url http://127.0.0.1:36299 --manifest manifest.toml --expected-diffs examples/expected_diffs.toml --output report.json
 
 Press Ctrl+C to shut down the mock nodes.

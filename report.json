@@ -1,60 +1,23 @@
 {
   "schema_version": "1",
-  "generated_at": "2026-05-16T18:37:00Z",
+  "generated_at": "2026-05-16T20:49:35Z",
   "summary": {
-    "total": 24,
-    "matches": 2,
-    "diffs": 1,
+    "total": 3,
+    "matches": 1,
+    "diffs": 0,
     "expected_diffs": 1,
-    "missing": 19,
-    "expected_missing": 0,
-    "errors": 1
+    "missing": 0,
+    "expected_missing": 1,
+    "errors": 0
   },
   "details": {
-    "getaddressesbyaccount": {
-      "type": "missing",
-      "method": "getaddressesbyaccount"
-    },
-    "getbalance": {
-      "type": "missing",
-      "method": "getbalance"
-    },
-    "getbestblockhash": {
-      "type": "missing",
-      "method": "getbestblockhash"
-    },
-    "getblockchaininfo": {
-      "type": "diff",
-      "diff_count": 1,
-      "diff_paths": [
-        "/chain"
-      ]
-    },
-    "getblockcount": {
-      "type": "match"
-    },
     "getconnectioncount": {
       "type": "match"
     },
-    "getdeprecationinfo": {
-      "type": "missing",
-      "method": "getdeprecationinfo"
-    },
-    "getdifficulty": {
-      "type": "missing",
-      "method": "getdifficulty"
-    },
-    "getmemoryinfo": {
-      "type": "error",
-      "message": "Upstream error: jsonrpsee error: ErrorObject { code: InternalError, message: \"Internal error\", data: None }"
-    },
-    "getmininginfo": {
-      "type": "missing",
-      "method": "getmininginfo"
-    },
     "getnettotals": {
-      "type": "missing",
-      "method": "getnettotals"
+      "type": "expected_missing",
+      "method": "getnettotals",
+      "reason": "Not yet implemented in Zallet."
     },
     "getnetworkinfo": {
       "type": "expected_diff",
@@ -63,54 +26,6 @@
         "/useragent"
       ],
       "reason": "Zallet reports its own agent/version string (e.g. 'Zallet/0.1.0') while zcashd reports '/MagicBean:...' — intentional product identity difference."
-    },
-    "getwalletinfo": {
-      "type": "missing",
-      "method": "getwalletinfo"
-    },
-    "listaddresses": {
-      "type": "missing",
-      "method": "listaddresses"
-    },
-    "listreceivedbyaddress": {
-      "type": "missing",
-      "method": "listreceivedbyaddress"
-    },
-    "listtransactions": {
-      "type": "missing",
-      "method": "listtransactions"
-    },
-    "listunspent": {
-      "type": "missing",
-      "method": "listunspent"
-    },
-    "validateaddress": {
-      "type": "missing",
-      "method": "validateaddress"
-    },
-    "z_getoperationresult": {
-      "type": "missing",
-      "method": "z_getoperationresult"
-    },
-    "z_getoperationstatus": {
-      "type": "missing",
-      "method": "z_getoperationstatus"
-    },
-    "z_gettotalbalance": {
-      "type": "missing",
-      "method": "z_gettotalbalance"
-    },
-    "z_listaddresses": {
-      "type": "missing",
-      "method": "z_listaddresses"
-    },
-    "z_listunspent": {
-      "type": "missing",
-      "method": "z_listunspent"
-    },
-    "z_validateaddress": {
-      "type": "missing",
-      "method": "z_validateaddress"
     }
   }
 }

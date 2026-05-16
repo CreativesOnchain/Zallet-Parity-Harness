@@ -58,12 +58,12 @@ diff_paths = []
 # so they do not trigger exit code 1 in CI.
 # ─────────────────────────────────────────────────────────────────────────────
 
-# [[expected]]
-# method = "z_getaddressforaccount"
-# reason = "Not yet implemented in Zallet. Tracked in ECC issue #1234."
-# expected_missing = true
+[[expected]]
+method = "z_getaddressforaccount"
+reason = "Not yet implemented in Zallet. Tracked in ECC issue #1234."
+expected_missing = true
 
-# [[expected]]
-# method = "z_getnewaddress"
-# reason = "Unified address support is in-progress. Expected Q2 2025."
-# expected_missing = true
+[[expected]]
+method = "getnettotals"
+reason = "Not yet implemented in Zallet."
+expected_missing = true
