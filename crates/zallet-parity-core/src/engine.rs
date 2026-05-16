@@ -6,7 +6,12 @@ use crate::manifest::MethodEntry;
 use crate::normalizer::{normalize, parse_ignore_paths};
 use jsonptr::PointerBuf;
 use serde_json::Value;
+use std::sync::Arc;
+use tokio::sync::Semaphore;
 use tokio::task::JoinSet;
+
+/// Default maximum number of concurrent RPC calls.
+pub const DEFAULT_CONCURRENCY: usize = 8;
 
 /// JSON-RPC "method not found" error code per spec.
 const METHOD_NOT_FOUND_CODE: i32 = -32601;
@@ -51,7 +56,8 @@ impl ParityEngine {
 
     /// Runs the parity checks for all methods defined in the manifest.
     ///
-    /// Each method is executed concurrently via [`tokio::task::JoinSet`].
+    /// At most `concurrency` RPC pairs are in-flight at once; set to
+    /// [`DEFAULT_CONCURRENCY`] for typical use.
     /// The normalization pipeline (key-sort + ignore-paths) is applied
     /// before comparison. If a diff is found and it matches an entry in
     /// `expected_diffs`, it is classified as [`ParityResult::ExpectedDiff`]
@@ -60,22 +66,25 @@ impl ParityEngine {
         &self,
         methods: Vec<MethodEntry>,
         expected_diffs: &ExpectedDiffs,
+        concurrency: usize,
     ) -> Vec<(String, ParityResult)> {
         let expected_entries: Vec<_> = expected_diffs.expected.clone();
+        let sem = Arc::new(Semaphore::new(concurrency.max(1)));
 
-        let mut set = spawn_tasks(&self.upstream, &self.target, methods, expected_entries);
+        let mut set = spawn_tasks(&self.upstream, &self.target, methods, expected_entries, sem);
         collect_results(&mut set).await
     }
 }
 
 // ── Task spawning ─────────────────────────────────────────────────────────────
 
-/// Spawns one async task per method and returns the `JoinSet` handle.
+/// Spawns one async task per method, bounded by a shared semaphore.
 fn spawn_tasks(
     upstream: &RpcClient,
     target: &RpcClient,
     methods: Vec<MethodEntry>,
     expected_entries: Vec<ExpectedDiffEntry>,
+    sem: Arc<Semaphore>,
 ) -> JoinSet<(String, ParityResult)> {
     let mut set = JoinSet::new();
 
@@ -83,8 +92,13 @@ fn spawn_tasks(
         let upstream = upstream.clone();
         let target = target.clone();
         let expected = expected_entries.clone();
+        let sem = Arc::clone(&sem);
 
-        set.spawn(async move { run_single_method(upstream, target, entry, expected).await });
+        set.spawn(async move {
+            // Acquire a permit; released automatically when `_permit` is dropped.
+            let _permit = sem.acquire_owned().await.expect("semaphore closed");
+            run_single_method(upstream, target, entry, expected).await
+        });
     }
 
     set
@@ -268,6 +282,7 @@ mod tests {
             name: name.to_string(),
             params: None,
             ignore_paths: vec![],
+            tags: vec![],
         }
     }
 
@@ -276,6 +291,16 @@ mod tests {
             name: name.to_string(),
             params: None,
             ignore_paths: paths.into_iter().map(String::from).collect(),
+            tags: vec![],
+        }
+    }
+
+    fn entry_with_params(name: &str, params: serde_json::Value) -> MethodEntry {
+        MethodEntry {
+            name: name.to_string(),
+            params: Some(params),
+            ignore_paths: vec![],
+            tags: vec![],
         }
     }
 
@@ -297,7 +322,7 @@ mod tests {
             RpcClient::new(&u.url()).unwrap(),
             RpcClient::new(&t.url()).unwrap(),
         );
-        let results = engine.run_all(vec![entry(method)], &no_expected()).await;
+        let results = engine.run_all(vec![entry(method)], &no_expected(), DEFAULT_CONCURRENCY).await;
         assert_eq!(results.len(), 1);
         assert!(matches!(results[0].1, ParityResult::Match));
     }
@@ -317,7 +342,7 @@ mod tests {
             RpcClient::new(&u.url()).unwrap(),
             RpcClient::new(&t.url()).unwrap(),
         );
-        let results = engine.run_all(vec![entry(method)], &no_expected()).await;
+        let results = engine.run_all(vec![entry(method)], &no_expected(), DEFAULT_CONCURRENCY).await;
         assert_eq!(results.len(), 1);
         assert!(
             matches!(results[0].1, ParityResult::Match),
@@ -341,7 +366,7 @@ mod tests {
             RpcClient::new(&u.url()).unwrap(),
             RpcClient::new(&t.url()).unwrap(),
         );
-        let results = engine.run_all(vec![entry(method)], &no_expected()).await;
+        let results = engine.run_all(vec![entry(method)], &no_expected(), DEFAULT_CONCURRENCY).await;
         assert_eq!(results.len(), 1);
         if let ParityResult::Diff { diff_entries } = &results[0].1 {
             assert_eq!(diff_entries.len(), 1);
@@ -375,7 +400,7 @@ mod tests {
             RpcClient::new(&u.url()).unwrap(),
             RpcClient::new(&t.url()).unwrap(),
         );
-        let results = engine.run_all(vec![entry(method)], &expected).await;
+        let results = engine.run_all(vec![entry(method)], &expected, DEFAULT_CONCURRENCY).await;
         assert_eq!(results.len(), 1);
         if let ParityResult::ExpectedDiff { reason, .. } = &results[0].1 {
             assert!(reason.contains("version"));
@@ -416,7 +441,7 @@ mod tests {
             RpcClient::new(&u.url()).unwrap(),
             RpcClient::new(&t.url()).unwrap(),
         );
-        let results = engine.run_all(vec![entry(method)], &expected).await;
+        let results = engine.run_all(vec![entry(method)], &expected, DEFAULT_CONCURRENCY).await;
         assert_eq!(results.len(), 1);
         assert!(
             matches!(results[0].1, ParityResult::ExpectedDiff { .. }),
@@ -457,7 +482,7 @@ mod tests {
             RpcClient::new(&u.url()).unwrap(),
             RpcClient::new(&t.url()).unwrap(),
         );
-        let results = engine.run_all(vec![entry(method)], &expected).await;
+        let results = engine.run_all(vec![entry(method)], &expected, DEFAULT_CONCURRENCY).await;
         assert_eq!(results.len(), 1);
         assert!(
             matches!(results[0].1, ParityResult::Diff { .. }),
@@ -493,6 +518,7 @@ mod tests {
             .run_all(
                 vec![entry_with_ignore(method, vec!["/volatile"])],
                 &no_expected(),
+                DEFAULT_CONCURRENCY,
             )
             .await;
         assert_eq!(results.len(), 1);
@@ -517,7 +543,7 @@ mod tests {
             RpcClient::new(&u.url()).unwrap(),
             RpcClient::new(&t.url()).unwrap(),
         );
-        let results = engine.run_all(vec![entry(method)], &no_expected()).await;
+        let results = engine.run_all(vec![entry(method)], &no_expected(), DEFAULT_CONCURRENCY).await;
         assert_eq!(results.len(), 1);
         assert!(
             matches!(&results[0].1, ParityResult::Missing { method: m } if m == method),
@@ -541,12 +567,137 @@ mod tests {
             RpcClient::new(&u.url()).unwrap(),
             RpcClient::new(&t.url()).unwrap(),
         );
-        let results = engine.run_all(vec![entry(method)], &no_expected()).await;
+        let results = engine.run_all(vec![entry(method)], &no_expected(), DEFAULT_CONCURRENCY).await;
         assert_eq!(results.len(), 1);
         assert!(
             matches!(&results[0].1, ParityResult::Error(msg) if msg.contains("Upstream error")),
             "expected Error, got {:?}",
             results[0].1
         );
+    }
+
+    // ── Params shape tests ────────────────────────────────────────────────────
+    // Verify that the client sends the correct params wire format.
+    // The MockNode only responds if params match exactly, so a wrong encoding
+    // would return ERROR instead of MATCH.
+
+    /// `params = null` (or absent) must send empty params — NOT `[null]`.
+    #[tokio::test]
+    async fn test_params_null_sends_empty() {
+        let u = MockNode::spawn().await;
+        let t = MockNode::spawn().await;
+        let method = "test_null_params";
+        // testkit matches the first element; json!(null) means no-params sentinel
+        u.mock_response(method, json!(null), json!({"ok": true})).await;
+        t.mock_response(method, json!(null), json!({"ok": true})).await;
+        let engine = ParityEngine::new(
+            RpcClient::new(&u.url()).unwrap(),
+            RpcClient::new(&t.url()).unwrap(),
+        );
+        let results = engine.run_all(vec![entry(method)], &no_expected(), DEFAULT_CONCURRENCY).await;
+        assert!(
+            matches!(results[0].1, ParityResult::Match),
+            "null-params method should MATCH, got: {:?}",
+            results[0].1
+        );
+    }
+
+    /// `params = [""]` must send `[""]` — NOT `[[""]]`.
+    #[tokio::test]
+    async fn test_params_array_is_spread() {
+        let u = MockNode::spawn().await;
+        let t = MockNode::spawn().await;
+        let method = "test_array_params";
+        // testkit matches first element of the params array sent over the wire.
+        // If params were double-wrapped it would be [""] not "" -> mock no-match -> ERROR.
+        u.mock_response(method, json!(""), json!({"ok": true})).await;
+        t.mock_response(method, json!(""), json!({"ok": true})).await;
+        let engine = ParityEngine::new(
+            RpcClient::new(&u.url()).unwrap(),
+            RpcClient::new(&t.url()).unwrap(),
+        );
+        let results = engine
+            .run_all(
+                vec![entry_with_params(method, json!([""])),],
+                &no_expected(),
+                DEFAULT_CONCURRENCY,
+            )
+            .await;
+        assert!(
+            matches!(results[0].1, ParityResult::Match),
+            "array-params method should MATCH (not ERROR), got: {:?}",
+            results[0].1
+        );
+    }
+
+    /// `params = "scalar"` must send `["scalar"]` (single positional arg).
+    #[tokio::test]
+    async fn test_params_scalar_is_wrapped() {
+        let u = MockNode::spawn().await;
+        let t = MockNode::spawn().await;
+        let method = "test_scalar_params";
+        u.mock_response(method, json!("myaddr"), json!({"ok": true})).await;
+        t.mock_response(method, json!("myaddr"), json!({"ok": true})).await;
+        let engine = ParityEngine::new(
+            RpcClient::new(&u.url()).unwrap(),
+            RpcClient::new(&t.url()).unwrap(),
+        );
+        let results = engine
+            .run_all(
+                vec![entry_with_params(method, json!("myaddr"))],
+                &no_expected(),
+                DEFAULT_CONCURRENCY,
+            )
+            .await;
+        assert!(
+            matches!(results[0].1, ParityResult::Match),
+            "scalar-params method should MATCH (not ERROR), got: {:?}",
+            results[0].1
+        );
+    }
+
+    // ── Deterministic report ordering ─────────────────────────────────────────
+
+    /// Two calls to FinalReport::new() with the same input must produce
+    /// bit-for-bit identical JSON for the `details` block (BTreeMap order).
+    #[test]
+    fn test_report_ordering_is_deterministic() {
+        use crate::report::FinalReport;
+
+        let make_results = || {
+            vec![
+                ("z_method".to_string(), ParityResult::Match),
+                ("a_method".to_string(), ParityResult::Match),
+                ("m_method".to_string(), ParityResult::Diff { diff_entries: vec![] }),
+            ]
+        };
+
+        let r1 = FinalReport::new(make_results());
+        let r2 = FinalReport::new(make_results());
+
+        let j1 = serde_json::to_string(&r1).unwrap();
+        let j2 = serde_json::to_string(&r2).unwrap();
+
+        // Strip the timestamp (which changes) and compare the structural part.
+        fn after_summary(s: &str) -> &str {
+            s.find("\"summary\"").map(|i| &s[i..]).unwrap_or(s)
+        }
+        assert_eq!(
+            after_summary(&j1),
+            after_summary(&j2),
+            "details JSON must be identical across runs"
+        );
+
+        // Verify keys appear in lexicographic order.
+        let val: serde_json::Value = serde_json::from_str(&j1).unwrap();
+        let keys: Vec<String> = val["details"]
+            .as_object()
+            .unwrap()
+            .keys()
+            .cloned()
+            .collect();
+        let mut sorted = keys.clone();
+        sorted.sort();
+        assert_eq!(keys, sorted, "details keys must be in lexicographic order");
     }
 }

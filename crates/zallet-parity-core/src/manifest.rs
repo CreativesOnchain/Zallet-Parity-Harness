@@ -24,6 +24,10 @@ pub struct MethodEntry {
     /// before comparison. Useful for volatile or intentionally-divergent fields.
     #[serde(default)]
     pub ignore_paths: Vec<String>,
+    /// Free-form labels for filtering and reporting (e.g. `["wallet", "shielded"]`).
+    /// Not used by the engine — informational only.
+    #[serde(default)]
+    pub tags: Vec<String>,
 }
 
 impl Manifest {

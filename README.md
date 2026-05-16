@@ -1,6 +1,6 @@
 # Zallet RPC Parity Harness
 
-[![Zallet RPC Diff CI](https://github.com/CreativesOnchain/Zallet/actions/workflows/zallet-rpc-diff.yml/badge.svg)](https://github.com/CreativesOnchain/Zallet/actions/workflows/zallet-rpc-diff.yml)
+[![Zallet RPC Diff CI](https://github.com/CreativesOnchain/Zallet-Parity-Harness/actions/workflows/zallet-rpc-diff.yml/badge.svg)](https://github.com/CreativesOnchain/Zallet-Parity-Harness/actions/workflows/zallet-rpc-diff.yml)
 
 A standalone parity-testing harness designed to compare the JSON-RPC outputs of `zcashd` and `Zallet`. 
 
@@ -22,8 +22,8 @@ You will need Rust 1.75+ installed.
 
 ```bash
 # 1. Clone the repository
-git clone https://github.com/CreativesOnchain/Zallet.git
-cd Zallet
+git clone https://github.com/CreativesOnchain/Zallet-Parity-Harness.git
+cd Zallet-Parity-Harness
 
 # 2. Build the project
 cargo build --release

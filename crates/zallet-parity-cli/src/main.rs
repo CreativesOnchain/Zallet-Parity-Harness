@@ -4,7 +4,7 @@ use indicatif::{MultiProgress, ProgressBar, ProgressStyle};
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 use zallet_parity_core::client::RpcClient;
-use zallet_parity_core::engine::ParityEngine;
+use zallet_parity_core::engine::{DEFAULT_CONCURRENCY, ParityEngine};
 use zallet_parity_core::expected_diffs::ExpectedDiffs;
 use zallet_parity_core::manifest::Manifest;
 use zallet_parity_core::report::{FinalReport, RunSummary};
@@ -114,6 +114,18 @@ enum Commands {
             help = "Output report path (default: reports/report.json); .md is also written"
         )]
         output: PathBuf,
+
+        /// Maximum number of RPC method pairs to run concurrently.
+        ///
+        /// Higher values finish faster but put more pressure on both nodes.
+        /// Defaults to 8. Set to 1 to run serially.
+        #[arg(
+            long,
+            default_value_t = DEFAULT_CONCURRENCY,
+            value_name = "N",
+            help = "Max concurrent RPC calls (default: 8)"
+        )]
+        concurrency: usize,
     },
 }
 
@@ -133,7 +145,8 @@ async fn main() -> ExitCode {
             manifest,
             expected_diffs,
             output,
-        } => run_parity_check(upstream_url, target_url, manifest, expected_diffs, output)
+            concurrency,
+        } => run_parity_check(upstream_url, target_url, manifest, expected_diffs, output, concurrency)
             .await
             .unwrap_or_else(|e| {
                 eprintln!("\n❌ Fatal error: {:#}", e);
@@ -155,15 +168,16 @@ async fn run_parity_check(
     manifest_path: PathBuf,
     expected_diffs_path: PathBuf,
     output_path: PathBuf,
+    concurrency: usize,
 ) -> Result<ExitCode> {
-    print_header(&upstream_url, &target_url);
+    print_header(&upstream_url, &target_url, concurrency);
 
     let manifest = load_manifest(&manifest_path)?;
     let expected_diffs = load_expected_diffs(&expected_diffs_path)?;
     let engine = build_engine(&upstream_url, &target_url)?;
 
     let pb = build_progress_bar(manifest.methods.len())?;
-    let results = engine.run_all(manifest.methods, &expected_diffs).await;
+    let results = engine.run_all(manifest.methods, &expected_diffs, concurrency).await;
     pb.finish_and_clear();
 
     let report = FinalReport::new(results);
@@ -178,10 +192,11 @@ async fn run_parity_check(
 // ── Phase helpers ─────────────────────────────────────────────────────────────
 
 /// Prints the startup banner showing which endpoints will be compared.
-fn print_header(upstream_url: &str, target_url: &str) {
-    println!("🚀 Starting Zallet Parity Check");
-    println!("   Upstream: {}", upstream_url);
-    println!("   Target:   {}", target_url);
+fn print_header(upstream_url: &str, target_url: &str, concurrency: usize) {
+    println!("\u{1f680} Starting Zallet Parity Check");
+    println!("   Upstream:    {}", upstream_url);
+    println!("   Target:      {}", target_url);
+    println!("   Concurrency: {}", concurrency);
     println!();
 }
 

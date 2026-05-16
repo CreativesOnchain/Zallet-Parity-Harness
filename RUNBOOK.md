@@ -52,10 +52,11 @@ cargo --version    # 1.75+
 
 ## 2. Installation
 
-Build from source (within the `zcash/wallet` workspace):
+Build from source (from the repo root):
 
 ```bash
-cd tools/zallet-rpc-diff
+git clone https://github.com/CreativesOnchain/Zallet-Parity-Harness.git
+cd Zallet-Parity-Harness
 cargo build --release
 ```
 
@@ -161,7 +162,8 @@ zallet-rpc-diff run \
   --target-url     http://user:pass@127.0.0.1:9067 \
   --manifest       manifest.toml \
   --expected-diffs expected_diffs.toml \
-  --output         report.json
+  --output         reports/report.json \
+  --concurrency    8
 ```
 
 ### With verbose logging
@@ -314,8 +316,14 @@ diff_paths = ["/version", "/subversion"]
 ### Method returns MISSING on Zallet
 
 Zallet is still being developed and does not yet implement all zcashd methods.
-This is expected. Track unimplemented methods in an `expected_diffs.toml` entry
-or open a Zallet issue.
+This is expected. The engine always reports a missing method as `MISSING` (exit code 1),
+regardless of whether it appears in `expected_diffs.toml`.
+
+To acknowledge missing methods without blocking CI:
+- Document them in a comment block in `expected_diffs.toml` for visibility.
+- Use `--expected-diffs` pointing to a file that explains why each method is not yet implemented.
+- Note: a future iteration may add first-class `EXPECTED_MISSING` support. Until then, missing methods
+  always count towards the exit-code-1 condition.
 
 ### Per-request timeout errors (ERROR with "timeout")
 

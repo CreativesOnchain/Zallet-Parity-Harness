@@ -23,14 +23,22 @@ impl MockNode {
     // ── Helpers ──────────────────────────────────────────────────────────────
 
     /// Returns `true` if the request body matches `method_name` and `expected_params`.
+    ///
+    /// Param matching rules (aligned with `encode_params` in the client):
+    /// - `expected_params = null` → accepts an empty params array (no-params call)
+    /// - anything else           → the first element of the params array must equal `expected_params`
     fn matches_call(body: &Value, method_name: &str, expected_params: &Value) -> bool {
         let m = body.get("method").and_then(|v| v.as_str()) == Some(method_name);
-        // jsonrpsee wraps params in a list: [{ ... }]
-        let p = body
-            .get("params")
-            .and_then(|v| v.as_array())
-            .and_then(|arr| arr.first())
-            == Some(expected_params);
+        let params_arr = body.get("params").and_then(|v| v.as_array());
+        let p = match (params_arr, expected_params) {
+            // No-params call: empty array matches Value::Null expectation
+            (None, Value::Null) | (Some(_), Value::Null) => {
+                params_arr.map_or(true, |arr| arr.is_empty())
+            }
+            // Positional-params call: first element must equal the expectation
+            (Some(arr), expected) => arr.first() == Some(expected),
+            (None, _) => false,
+        };
         m && p
     }
 

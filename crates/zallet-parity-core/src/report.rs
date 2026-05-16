@@ -1,15 +1,20 @@
 use crate::differ::DiffEntry;
 use crate::engine::ParityResult;
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
+use std::collections::BTreeMap;
 
 // ── Report types ──────────────────────────────────────────────────────────────
 
 /// The final report structure for a parity run.
 #[derive(Debug, Serialize, Deserialize)]
 pub struct FinalReport {
+    /// Schema version for forward-compatibility; currently `"1"`.
+    pub schema_version: &'static str,
+    /// ISO-8601 UTC timestamp of when this report was generated.
+    pub generated_at: String,
     pub summary: RunSummary,
-    pub details: HashMap<String, ParityResultReport>,
+    /// Per-method results, ordered lexicographically by method name.
+    pub details: BTreeMap<String, ParityResultReport>,
 }
 
 /// Aggregate counts for the run summary.
@@ -63,7 +68,7 @@ impl FinalReport {
         let mut expected_diffs = 0usize;
         let mut missing = 0usize;
         let mut errors = 0usize;
-        let mut details = HashMap::new();
+        let mut details = BTreeMap::new();
 
         for (method, res) in results {
             let report_res = classify_result(
@@ -78,6 +83,8 @@ impl FinalReport {
         }
 
         Self {
+            schema_version: "1",
+            generated_at: generated_at_now(),
             summary: RunSummary {
                 total: details.len(),
                 matches,
@@ -93,8 +100,8 @@ impl FinalReport {
     /// Returns the raw `DiffEntry` objects for a given method (for verbose/debug output).
     pub fn with_diff_detail(
         results: Vec<(String, ParityResult)>,
-    ) -> (Self, HashMap<String, Vec<DiffEntry>>) {
-        let mut raw_diffs: HashMap<String, Vec<DiffEntry>> = HashMap::new();
+    ) -> (Self, BTreeMap<String, Vec<DiffEntry>>) {
+        let mut raw_diffs: BTreeMap<String, Vec<DiffEntry>> = BTreeMap::new();
         let mapped: Vec<(String, ParityResult)> = results
             .into_iter()
             .map(|(method, res)| {
@@ -118,6 +125,58 @@ impl FinalReport {
         md.push_str(&render_details_table(&self.details));
         md
     }
+}
+
+// ── Timestamp helper ─────────────────────────────────────────────────────────────
+
+/// Returns the current UTC time as an ISO-8601 string.
+///
+/// Uses only `std` — avoids an external chrono/time dep.
+fn generated_at_now() -> String {
+    use std::time::{SystemTime, UNIX_EPOCH};
+    let secs = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs();
+    // RFC 3339 / ISO-8601 — seconds precision is sufficient for report stamping.
+    let (y, mo, d, h, mi, s) = unix_secs_to_datetime(secs);
+    format!("{:04}-{:02}-{:02}T{:02}:{:02}:{:02}Z", y, mo, d, h, mi, s)
+}
+
+/// Converts UNIX seconds to (year, month, day, hour, minute, second).
+/// Implements a minimal Gregorian calendar calculation without external deps.
+fn unix_secs_to_datetime(secs: u64) -> (u64, u64, u64, u64, u64, u64) {
+    let s = secs % 60;
+    let mins = secs / 60;
+    let mi = mins % 60;
+    let hours = mins / 60;
+    let h = hours % 24;
+    let mut days = hours / 24;
+
+    // Gregorian calendar epoch: 1 Jan 1970
+    let mut y = 1970u64;
+    loop {
+        let days_in_year = if is_leap(y) { 366 } else { 365 };
+        if days < days_in_year {
+            break;
+        }
+        days -= days_in_year;
+        y += 1;
+    }
+    let months = [31, if is_leap(y) { 29 } else { 28 }, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31];
+    let mut mo = 1u64;
+    for m in months {
+        if days < m {
+            break;
+        }
+        days -= m;
+        mo += 1;
+    }
+    (y, mo, days + 1, h, mi, s)
+}
+
+fn is_leap(y: u64) -> bool {
+    (y % 4 == 0 && y % 100 != 0) || y % 400 == 0
 }
 
 // ── Construction helpers ──────────────────────────────────────────────────────
@@ -195,15 +254,13 @@ fn render_summary_section(s: &RunSummary) -> String {
 }
 
 /// Renders the per-method detailed results as a sorted Markdown table.
-fn render_details_table(details: &HashMap<String, ParityResultReport>) -> String {
+fn render_details_table(details: &BTreeMap<String, ParityResultReport>) -> String {
     let mut md = String::from("## Detailed Results\n\n");
     md.push_str("| Method | Status | Details |\n");
     md.push_str("| :--- | :--- | :--- |\n");
 
-    let mut sorted: Vec<_> = details.iter().collect();
-    sorted.sort_by_key(|(k, _)| *k);
-
-    for (method, res) in sorted {
+    // BTreeMap iterates in sorted order — no manual sort needed.
+    for (method, res) in details {
         let (status, notes) = format_result_row(res);
         md.push_str(&format!(
             "| `{}` | {} | {} |\n",
