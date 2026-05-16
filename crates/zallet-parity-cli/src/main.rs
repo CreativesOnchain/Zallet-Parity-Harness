@@ -159,6 +159,16 @@ enum Commands {
             help = "Print the filtered method list and exit without making RPC calls"
         )]
         dry_run: bool,
+
+        /// Save raw JSON responses for any method that does not match.
+        ///
+        /// This creates a `reports/raw/` directory and writes `upstream_<method>.json`
+        /// and `target_<method>.json` for methods that return a DIFF, MISSING, or ERROR.
+        #[arg(
+            long,
+            help = "Save raw JSON responses for debugging when methods do not match"
+        )]
+        save_raw: bool,
     },
 }
 
@@ -182,6 +192,7 @@ async fn main() -> ExitCode {
             tags,
             exclude_tags,
             dry_run,
+            save_raw,
         } => run_parity_check(
             upstream_url,
             target_url,
@@ -192,6 +203,7 @@ async fn main() -> ExitCode {
             tags,
             exclude_tags,
             dry_run,
+            save_raw,
         )
         .await
         .unwrap_or_else(|e| {
@@ -219,6 +231,7 @@ async fn run_parity_check(
     tags: Vec<String>,
     exclude_tags: Vec<String>,
     dry_run: bool,
+    save_raw: bool,
 ) -> Result<ExitCode> {
     print_header(
         &upstream_url,
@@ -261,7 +274,7 @@ async fn run_parity_check(
 
     let pb = build_progress_bar(manifest.methods.len())?;
     let results = engine
-        .run_all(manifest.methods, &expected_diffs, concurrency)
+        .run_all(manifest.methods, &expected_diffs, concurrency, save_raw)
         .await;
     pb.finish_and_clear();
 

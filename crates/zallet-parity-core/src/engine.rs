@@ -71,11 +71,19 @@ impl ParityEngine {
         methods: Vec<MethodEntry>,
         expected_diffs: &ExpectedDiffs,
         concurrency: usize,
+        save_raw: bool,
     ) -> Vec<(String, ParityResult)> {
         let expected_entries: Vec<_> = expected_diffs.expected.clone();
         let sem = Arc::new(Semaphore::new(concurrency.max(1)));
 
-        let mut set = spawn_tasks(&self.upstream, &self.target, methods, expected_entries, sem);
+        let mut set = spawn_tasks(
+            &self.upstream,
+            &self.target,
+            methods,
+            expected_entries,
+            sem,
+            save_raw,
+        );
         collect_results(&mut set).await
     }
 }
@@ -89,6 +97,7 @@ fn spawn_tasks(
     methods: Vec<MethodEntry>,
     expected_entries: Vec<ExpectedDiffEntry>,
     sem: Arc<Semaphore>,
+    save_raw: bool,
 ) -> JoinSet<(String, ParityResult)> {
     let mut set = JoinSet::new();
 
@@ -101,7 +110,7 @@ fn spawn_tasks(
         set.spawn(async move {
             // Acquire a permit; released automatically when `_permit` is dropped.
             let _permit = sem.acquire_owned().await.expect("semaphore closed");
-            run_single_method(upstream, target, entry, expected).await
+            run_single_method(upstream, target, entry, expected, save_raw).await
         });
     }
 
@@ -130,6 +139,7 @@ async fn run_single_method(
     target: RpcClient,
     entry: MethodEntry,
     expected_entries: Vec<ExpectedDiffEntry>,
+    save_raw: bool,
 ) -> (String, ParityResult) {
     let method_name = entry.name.clone();
     let params = entry.params.clone().unwrap_or(Value::Null);
@@ -138,7 +148,29 @@ async fn run_single_method(
     let res_u = upstream.call(&method_name, params.clone()).await;
     let res_t = target.call(&method_name, params).await;
 
-    let parity = classify_rpc_results(res_u, res_t, &method_name, &ignore_paths, &expected_entries);
+    let u_str = match &res_u {
+        Ok(v) => serde_json::to_string_pretty(v).unwrap_or_else(|_| format!("{:?}", v)),
+        Err(e) => format!("Error: {}", e),
+    };
+    let t_str = match &res_t {
+        Ok(v) => serde_json::to_string_pretty(v).unwrap_or_else(|_| format!("{:?}", v)),
+        Err(e) => format!("Error: {}", e),
+    };
+
+    let parity = classify_rpc_results(
+        res_u,
+        res_t,
+        &method_name,
+        &ignore_paths,
+        &expected_entries,
+    );
+
+    if save_raw && !matches!(parity, ParityResult::Match) {
+        let _ = std::fs::create_dir_all("reports/raw");
+        let _ = std::fs::write(format!("reports/raw/upstream_{}.json", method_name), u_str);
+        let _ = std::fs::write(format!("reports/raw/target_{}.json", method_name), t_str);
+    }
+
     (method_name, parity)
 }
 
@@ -341,7 +373,7 @@ mod tests {
             RpcClient::new(&t.url()).unwrap(),
         );
         let results = engine
-            .run_all(vec![entry(method)], &no_expected(), DEFAULT_CONCURRENCY)
+            .run_all(vec![entry(method)], &no_expected(), DEFAULT_CONCURRENCY, false)
             .await;
         assert_eq!(results.len(), 1);
         assert!(matches!(results[0].1, ParityResult::Match));
@@ -363,7 +395,7 @@ mod tests {
             RpcClient::new(&t.url()).unwrap(),
         );
         let results = engine
-            .run_all(vec![entry(method)], &no_expected(), DEFAULT_CONCURRENCY)
+            .run_all(vec![entry(method)], &no_expected(), DEFAULT_CONCURRENCY, false)
             .await;
         assert_eq!(results.len(), 1);
         assert!(
@@ -389,7 +421,7 @@ mod tests {
             RpcClient::new(&t.url()).unwrap(),
         );
         let results = engine
-            .run_all(vec![entry(method)], &no_expected(), DEFAULT_CONCURRENCY)
+            .run_all(vec![entry(method)], &no_expected(), DEFAULT_CONCURRENCY, false)
             .await;
         assert_eq!(results.len(), 1);
         if let ParityResult::Diff { diff_entries } = &results[0].1 {
@@ -426,7 +458,7 @@ mod tests {
             RpcClient::new(&t.url()).unwrap(),
         );
         let results = engine
-            .run_all(vec![entry(method)], &expected, DEFAULT_CONCURRENCY)
+            .run_all(vec![entry(method)], &expected, DEFAULT_CONCURRENCY, false)
             .await;
         assert_eq!(results.len(), 1);
         if let ParityResult::ExpectedDiff { reason, .. } = &results[0].1 {
@@ -470,7 +502,7 @@ mod tests {
             RpcClient::new(&t.url()).unwrap(),
         );
         let results = engine
-            .run_all(vec![entry(method)], &expected, DEFAULT_CONCURRENCY)
+            .run_all(vec![entry(method)], &expected, DEFAULT_CONCURRENCY, false)
             .await;
         assert_eq!(results.len(), 1);
         assert!(
@@ -514,7 +546,7 @@ mod tests {
             RpcClient::new(&t.url()).unwrap(),
         );
         let results = engine
-            .run_all(vec![entry(method)], &expected, DEFAULT_CONCURRENCY)
+            .run_all(vec![entry(method)], &expected, DEFAULT_CONCURRENCY, false)
             .await;
         assert_eq!(results.len(), 1);
         assert!(
@@ -551,8 +583,7 @@ mod tests {
             .run_all(
                 vec![entry_with_ignore(method, vec!["/volatile"])],
                 &no_expected(),
-                DEFAULT_CONCURRENCY,
-            )
+                DEFAULT_CONCURRENCY, false)
             .await;
         assert_eq!(results.len(), 1);
         assert!(
@@ -577,7 +608,7 @@ mod tests {
             RpcClient::new(&t.url()).unwrap(),
         );
         let results = engine
-            .run_all(vec![entry(method)], &no_expected(), DEFAULT_CONCURRENCY)
+            .run_all(vec![entry(method)], &no_expected(), DEFAULT_CONCURRENCY, false)
             .await;
         assert_eq!(results.len(), 1);
         assert!(
@@ -603,7 +634,7 @@ mod tests {
             RpcClient::new(&t.url()).unwrap(),
         );
         let results = engine
-            .run_all(vec![entry(method)], &no_expected(), DEFAULT_CONCURRENCY)
+            .run_all(vec![entry(method)], &no_expected(), DEFAULT_CONCURRENCY, false)
             .await;
         assert_eq!(results.len(), 1);
         assert!(
@@ -638,7 +669,7 @@ mod tests {
             RpcClient::new(&t.url()).unwrap(),
         );
         let results = engine
-            .run_all(vec![entry(method)], &expected, DEFAULT_CONCURRENCY)
+            .run_all(vec![entry(method)], &expected, DEFAULT_CONCURRENCY, false)
             .await;
         assert_eq!(results.len(), 1);
         assert!(
@@ -667,7 +698,7 @@ mod tests {
             RpcClient::new(&t.url()).unwrap(),
         );
         let results = engine
-            .run_all(vec![entry(method)], &no_expected(), DEFAULT_CONCURRENCY)
+            .run_all(vec![entry(method)], &no_expected(), DEFAULT_CONCURRENCY, false)
             .await;
         assert!(
             matches!(&results[0].1, ParityResult::Missing { .. }),
@@ -697,7 +728,7 @@ mod tests {
             RpcClient::new(&t.url()).unwrap(),
         );
         let results = engine
-            .run_all(vec![entry(method)], &no_expected(), DEFAULT_CONCURRENCY)
+            .run_all(vec![entry(method)], &no_expected(), DEFAULT_CONCURRENCY, false)
             .await;
         assert!(
             matches!(results[0].1, ParityResult::Match),
@@ -726,8 +757,7 @@ mod tests {
             .run_all(
                 vec![entry_with_params(method, json!([""]))],
                 &no_expected(),
-                DEFAULT_CONCURRENCY,
-            )
+                DEFAULT_CONCURRENCY, false)
             .await;
         assert!(
             matches!(results[0].1, ParityResult::Match),
@@ -754,8 +784,7 @@ mod tests {
             .run_all(
                 vec![entry_with_params(method, json!("myaddr"))],
                 &no_expected(),
-                DEFAULT_CONCURRENCY,
-            )
+                DEFAULT_CONCURRENCY, false)
             .await;
         assert!(
             matches!(results[0].1, ParityResult::Match),
